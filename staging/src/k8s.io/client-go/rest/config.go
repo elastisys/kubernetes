@@ -131,6 +131,9 @@ type Config struct {
 	// Version forces a specific version to be used (if registered)
 	// Do we need this?
 	// Version string
+
+	// Pkcs11Info specifies how to authenticate using a Hardware Security Module (HSM).
+	Pkcs11Info *clientcmdapi.Pkcs11Info
 }
 
 var _ fmt.Stringer = new(Config)
