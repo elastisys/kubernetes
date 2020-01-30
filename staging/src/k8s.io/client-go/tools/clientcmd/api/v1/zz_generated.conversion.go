@@ -411,8 +411,9 @@ func Convert_api_ExecEnvVar_To_v1_ExecEnvVar(in *api.ExecEnvVar, out *ExecEnvVar
 
 func autoConvert_v1_Pkcs11Info_To_api_Pkcs11Info(in *Pkcs11Info, out *api.Pkcs11Info, s conversion.Scope) error {
 	out.Path = in.Path
-	out.Pin = in.Pin
 	out.TokenLabel = in.TokenLabel
+	out.Pin = in.Pin
+	out.CertLabel = in.CertLabel
 	return nil
 }
 
@@ -423,8 +424,9 @@ func Convert_v1_Pkcs11Info_To_api_Pkcs11Info(in *Pkcs11Info, out *api.Pkcs11Info
 
 func autoConvert_api_Pkcs11Info_To_v1_Pkcs11Info(in *api.Pkcs11Info, out *Pkcs11Info, s conversion.Scope) error {
 	out.Path = in.Path
-	out.Pin = in.Pin
 	out.TokenLabel = in.TokenLabel
+	out.Pin = in.Pin
+	out.CertLabel = in.CertLabel
 	return nil
 }
 

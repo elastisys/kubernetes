@@ -109,9 +109,7 @@ func (c *Config) TransportConfig() (*transport.Config, error) {
 		conf.Wrap(provider.WrapTransport)
 	}
 	if c.Pkcs11Info != nil {
-		conf.TLS.GetCert = func() (*tls.Certificate, error) {
-			return GetCertForPkcs11Info(c.Pkcs11Info)
-		}
+		conf.TLS.GetCert = GetCertForPkcs11Info(c.Pkcs11Info)
 	}
 	return conf, nil
 }

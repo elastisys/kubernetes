@@ -23,6 +23,7 @@ package crypto11
 
 import (
 	"crypto"
+	"fmt"
 
 	"github.com/miekg/pkcs11"
 	"github.com/pkg/errors"
@@ -126,7 +127,7 @@ func (c *Context) makeKeyPair(session *pkcs11Session, privHandle *pkcs11.ObjectH
 	var pubHandle *pkcs11.ObjectHandle
 
 	// Find the public half which has a matching CKA_ID
-	pubHandle, err = findKey(session, id, label, uintPtr(pkcs11.CKO_PUBLIC_KEY), &keyType)
+	pubHandle, err = findKey(session, id, nil, uintPtr(pkcs11.CKO_PUBLIC_KEY), &keyType)
 	if err != nil {
 		p11Err, ok := err.(pkcs11.Error)
 
@@ -317,12 +318,17 @@ func (c *Context) FindKeyPairsWithAttributes(attributes AttributeSet) (signer []
 		}
 
 		privHandles, err := findKeysWithAttributes(session, privAttributes.ToSlice())
+		fmt.Println("privHandles")
+		fmt.Println(privHandles)
 		if err != nil {
 			return err
 		}
 
 		for _, privHandle := range privHandles {
 			k, err := c.makeKeyPair(session, &privHandle)
+			fmt.Println("interating")
+			fmt.Println(privHandle)
+			fmt.Println(err)
 
 			if err == errNoCkaId || err == errNoPublicHalf {
 				continue

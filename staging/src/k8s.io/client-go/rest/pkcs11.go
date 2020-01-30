@@ -19,13 +19,73 @@ package rest
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 
+	"github.com/ThalesIgnite/crypto11"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 var errNotImplemented = errors.New("not implemented")
+var errPrivateKeyNotFound = errors.New("private key not found")
+var errCertificateNotFound = errors.New("certificate not found")
 
-// GetCertForPkcs11Info returns a certificate managed by a Hardware Security Module (HSM).
-func GetCertForPkcs11Info(info *clientcmdapi.Pkcs11Info) (*tls.Certificate, error) {
-	return nil, errNotImplemented
+func wrapError(err error) (func() (*tls.Certificate, error)) {
+	return func() (*tls.Certificate, error) { return nil, err }
+}
+
+func wrapCertificate(cert *tls.Certificate) (func() (*tls.Certificate, error)) {
+	return func() (*tls.Certificate, error) { return cert, nil }
+}
+
+var ctx *crypto11.Context
+
+// GetCertForPkcs11Info returns a function returning a certificate managed by a Hardware Security Module (HSM).
+func GetCertForPkcs11Info(info *clientcmdapi.Pkcs11Info) (func() (*tls.Certificate, error)) {
+	var err error
+	
+	if ctx == nil {
+		slotNumber := 0
+		config := &crypto11.Config{
+			Path: info.Path,
+			Pin: info.Pin,
+			SlotNumber: &slotNumber,
+			MaxSessions: 2,
+		}
+	
+		ctx, err = crypto11.Configure(config)
+		if err != nil {
+			return wrapError(err)
+		}
+		fmt.Println("Context configured successfully!")
+		//defer ctx.Close()	
+	}
+
+	cert, err := ctx.FindCertificate([]byte{2}, nil, nil)
+	if err != nil {
+		fmt.Println(err)
+		return wrapError(err)
+	}
+	if cert == nil {
+		return wrapError(errCertificateNotFound)
+	}
+	fmt.Println("Certificate found!")
+	fmt.Println(cert)
+
+	key, err := ctx.FindKeyPair([]byte{2}, nil)
+	if err != nil {
+		return wrapError(err)
+	}
+	if key == nil {
+		return wrapError(errPrivateKeyNotFound)
+	}
+	fmt.Println("Key found!")
+	fmt.Println(key)
+
+	tlsCert := &tls.Certificate{
+		Certificate: [][]byte{ cert.Raw },
+		PrivateKey: key,
+		Leaf: cert,
+	}
+
+	return wrapCertificate(tlsCert)
 }
