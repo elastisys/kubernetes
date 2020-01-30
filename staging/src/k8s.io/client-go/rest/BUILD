@@ -49,6 +49,7 @@ go_library(
     srcs = [
         "client.go",
         "config.go",
+        "pkcs11.go",
         "plugin.go",
         "request.go",
         "transport.go",
