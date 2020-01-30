@@ -323,7 +323,6 @@ readonly KUBE_STATIC_LIBRARIES=(
   kube-scheduler
   kube-proxy
   kubeadm
-  kubectl
 )
 
 # Fully-qualified package names that we want to instrument for coverage information.
@@ -339,7 +338,9 @@ readonly KUBE_COVERAGE_INSTRUMENTED_PACKAGES=(
 # with CGO enabled, assuming CGO is supported on the target platform.
 # This overrides any entry in KUBE_STATIC_LIBRARIES.
 IFS=" " read -ra KUBE_CGO_OVERRIDES <<< "${KUBE_CGO_OVERRIDES:-}"
-readonly KUBE_CGO_OVERRIDES
+readonly KUBE_CGO_OVERRIDES=(
+  kubectl
+)
 # KUBE_STATIC_OVERRIDES is a space-separated list of binaries which should be
 # built with CGO disabled. This is in addition to the list in
 # KUBE_STATIC_LIBRARIES.
