@@ -604,5 +604,6 @@ func CopyConfig(config *Config) *Config {
 		RateLimiter:        config.RateLimiter,
 		Timeout:            config.Timeout,
 		Dial:               config.Dial,
+		Pkcs11Info:         config.Pkcs11Info,
 	}
 }
