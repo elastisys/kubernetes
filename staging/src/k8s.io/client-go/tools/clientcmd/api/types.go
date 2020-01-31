@@ -88,12 +88,12 @@ type Cluster struct {
 type Pkcs11Info struct {
 	// Path indicates the full path to PKCS#11 library.
 	Path string `json:"path"`
-	// TokenLabel indicates the label of the token (i.e., HSM) to use. Can be retrieved using `pkcs11-tool --list-token-slots`.
-	TokenLabel string `json:"token-label"`
+	// SlotID indicates the ID of the slot (i.e., HSM) to use. Can be retrieved using `pkcs11-tool --list-token-slots`.
+	SlotID int `json:"slot-id"`
 	// Pin indicates the PIN to access the certificate on the HSM.
 	Pin string `json:"pin"`
-	// CertLabel indicates the label of the certificate on the HSM to use.
-	CertLabel string `json:"cert-label"`
+	// ObjectID indicates the ID of the certificate on the HSM to use. Can be retrieved using `pkcs11-tools --list-objects`
+	ObjectID byte `json:"object-id"`
 }
 
 // AuthInfo contains information that describes identity information.  This is use to tell the kubernetes cluster who you are.
