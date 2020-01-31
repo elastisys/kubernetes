@@ -770,11 +770,9 @@ static inline CK_VOID_PTR getAttributePval(CK_ATTRIBUTE_PTR a)
 
 */
 import "C"
-import (
-	"fmt"
-	"strings"
-	"unsafe"
-)
+import "strings"
+
+import "unsafe"
 
 // Ctx contains the current pkcs11 context.
 type Ctx struct {
@@ -1316,7 +1314,6 @@ func (c *Ctx) SignInit(sh SessionHandle, m []*Mechanism, o ObjectHandle) error {
 	arena, mech := cMechanism(m)
 	defer arena.Free()
 	e := C.SignInit(c.ctx, C.CK_SESSION_HANDLE(sh), mech, C.CK_OBJECT_HANDLE(o))
-	fmt.Printf("pkcs11.SignInit %v\n", e)
 	return toError(e)
 }
 

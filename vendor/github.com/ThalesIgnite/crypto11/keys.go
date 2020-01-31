@@ -23,7 +23,6 @@ package crypto11
 
 import (
 	"crypto"
-	"fmt"
 
 	"github.com/miekg/pkcs11"
 	"github.com/pkg/errors"
@@ -318,17 +317,12 @@ func (c *Context) FindKeyPairsWithAttributes(attributes AttributeSet) (signer []
 		}
 
 		privHandles, err := findKeysWithAttributes(session, privAttributes.ToSlice())
-		fmt.Println("privHandles")
-		fmt.Println(privHandles)
 		if err != nil {
 			return err
 		}
 
 		for _, privHandle := range privHandles {
 			k, err := c.makeKeyPair(session, &privHandle)
-			fmt.Println("interating")
-			fmt.Println(privHandle)
-			fmt.Println(err)
 
 			if err == errNoCkaId || err == errNoPublicHalf {
 				continue

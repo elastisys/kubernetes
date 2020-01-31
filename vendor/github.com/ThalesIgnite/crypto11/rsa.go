@@ -25,7 +25,6 @@ import (
 	"crypto"
 	"crypto/rsa"
 	"errors"
-	"fmt"
 	"io"
 	"math/big"
 
@@ -249,7 +248,6 @@ func signPSS(session *pkcs11Session, key *pkcs11PrivateKeyRSA, digest []byte, op
 	var hMech, mgf, hLen, sLen uint
 	var err error
 	if hMech, mgf, hLen, err = hashToPKCS11(opts.Hash); err != nil {
-		fmt.Println("uff")
 		return nil, err
 	}
 	switch opts.SaltLength {
@@ -257,7 +255,6 @@ func signPSS(session *pkcs11Session, key *pkcs11PrivateKeyRSA, digest []byte, op
 		// TODO we could (in principle) work out the biggest
 		// possible size from the key, but until someone has
 		// the effort to do that...
-		fmt.Println("Nosalt")
 		return nil, errUnsupportedRSAOptions
 	case rsa.PSSSaltLengthEqualsHash:
 		sLen = hLen
@@ -271,7 +268,6 @@ func signPSS(session *pkcs11Session, key *pkcs11PrivateKeyRSA, digest []byte, op
 		ulongToBytes(sLen))
 	mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_PSS, parameters)}
 	if err = session.ctx.SignInit(session.handle, mech, key.handle); err != nil {
-		fmt.Println("SignInit")
 		return nil, err
 	}
 	return session.ctx.Sign(session.handle, digest)
@@ -311,17 +307,12 @@ func signPKCS1v15(session *pkcs11Session, key *pkcs11PrivateKeyRSA, digest []byt
 // explicit salt length. Moreover the underlying PKCS#11
 // implementation may impose further restrictions.
 func (priv *pkcs11PrivateKeyRSA) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error) {
-	fmt.Printf("signing %v\n", opts)
 	err = priv.context.withSession(func(session *pkcs11Session) error {
 		switch opts.(type) {
 		case *rsa.PSSOptions:
-			fmt.Println("sign 1")
 			signature, err = signPSS(session, priv, digest, opts.(*rsa.PSSOptions))
-			fmt.Printf("sign 1 %v\n", err)
 		default: /* PKCS1-v1_5 */
-			fmt.Println("sign 2")
 			signature, err = signPKCS1v15(session, priv, digest, opts.HashFunc())
-			fmt.Printf("sign 2 %v\n", err)
 		}
 		return err
 	})

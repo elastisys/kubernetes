@@ -44,16 +44,11 @@ func (s pkcs11Session) Close() {
 
 // withSession executes a function with a session.
 func (c *Context) withSession(f func(session *pkcs11Session) error) error {
-	session := &pkcs11Session{
-		ctx: c.ctx,
-		handle: c.persistentSession,
-	}
-	/*
 	session, err := c.getSession()
 	if err != nil {
 		return err
 	}
-	defer c.pool.Put(session)*/
+	defer c.pool.Put(session)
 
 	return f(session)
 }
