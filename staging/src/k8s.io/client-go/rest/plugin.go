@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"sync"
 
+	"k8s.io/client-go/transport"
 	"k8s.io/klog"
 
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -33,6 +34,13 @@ type AuthProvider interface {
 	// Login allows the plugin to initialize its configuration. It must not
 	// require direct user interaction.
 	Login() error
+}
+
+type AuthProviderTLS interface {
+	AuthProvider
+	// UpdateTransportConfig allows the plugin to update the transport
+	// configuration, e.g., override TLS certificates.
+	UpdateTransportConfig(c *transport.Config) error
 }
 
 // Factory generates an AuthProvider plugin.
