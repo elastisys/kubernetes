@@ -42,3 +42,7 @@ pe "cat ~/.kube/config"
 pe "kubectl config set-credentials minikube --auth-provider=pkcs11 --auth-provider-arg=path=/usr/local/lib/libykcs11.so,pin=123456,slot-id=0,object-id=2"
 pe "cat ~/.kube/config"
 pe "kubectl get pods -n kube-system"
+
+pe "# Let's try without the YubiKey now"
+pe "kubectl get pods -n kube-system"
+pe ""
