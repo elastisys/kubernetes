@@ -84,18 +84,6 @@ type Cluster struct {
 	Extensions map[string]runtime.Object `json:"extensions,omitempty"`
 }
 
-// Pkcs11Info contains information that describe PKCS#11 authentication. This is to tell client-go how to find your Hardware Security Module (HSM) and which certificate to use from it. These fields closely match whatever github.com/ThalesIgnite/crypto11#Config provides.
-type Pkcs11Info struct {
-	// Path indicates the full path to PKCS#11 library.
-	Path string `json:"path"`
-	// SlotID indicates the ID of the slot (i.e., HSM) to use. Can be retrieved using `pkcs11-tool --list-token-slots`.
-	SlotID int `json:"slot-id"`
-	// Pin indicates the PIN to access the certificate on the HSM.
-	Pin string `json:"pin"`
-	// ObjectID indicates the ID of the certificate on the HSM to use. Can be retrieved using `pkcs11-tools --list-objects`
-	ObjectID byte `json:"object-id"`
-}
-
 // AuthInfo contains information that describes identity information.  This is use to tell the kubernetes cluster who you are.
 type AuthInfo struct {
 	// LocationOfOrigin indicates where this object came from.  It is used for round tripping config post-merge, but never serialized.
@@ -143,9 +131,6 @@ type AuthInfo struct {
 	// Extensions holds additional information. This is useful for extenders so that reads and writes don't clobber unknown fields
 	// +optional
 	Extensions map[string]runtime.Object `json:"extensions,omitempty"`
-	// Pkcs11Info specifies PKCS#11 setting to authenticate to the cluster.
-	// +optional
-	Pkcs11Info *Pkcs11Info `json:"pkcs11,omitempty"`
 }
 
 // Context is a tuple of references to a cluster (how do I communicate with a kubernetes cluster), a user (how do I identify myself), and a namespace (what subset of resources do I want to work with)
