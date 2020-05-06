@@ -4,13 +4,21 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
+	"fmt"
+	"io"
 	"math/big"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
+
+	restclient "k8s.io/client-go/rest"
 )
 
 var (
@@ -60,9 +68,39 @@ F6NmLCQOO4PDG/cuatNHIr2FrwTmGdEL6ObLUGWn9Oer9gJhHVqqsY5I4sEPo4XX
 stR0Yiw0buV6DL/moUO0HIM9Bjh96HJp+LxiIS6UCdIhMPp5HoQa
 -----END RSA PRIVATE KEY-----`)
 	validCert *tls.Certificate
+	x509Cert  *x509.Certificate
 )
 
+// var (
+// 	certData, _ = b64.StdEncoding.DecodeString("-----BEGIN CERTIFICATE-----MIIC6zCCAdOgAwIBAgIQPp3pFNWcKrNGBSVdx/zMUDANBgkqhkiG9w0BAQsFADAQMQ4wDAYDVQQKEwVqYWt1YjAeFw0xOTA5MTExMjQ0MDBaFw0yMjA4MjYxMjQ0MDBaMBwxGjAYBgNVBAoMEWpha3ViLjxib290c3RyYXA+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuw1gaKFz6UVPEA5XJuCgU4+FWZgOx70Zq3+NKr3yEGVJ2s8Wu7WV8YpDTkekjg9Y9+k6NEHoNvDlubuAzqgbJhHnQlD+hLmMsz+uALCdclNdiBzQjr9P7HB4YpGgTueTaoDOMCECGwt69yyBrgo5lawgF/4dRNmsxtfVcCYIAPuc3bUaXO4pC/C/eMTW1Ck5cFUYYZgY23pPKh7sWGfMi0srArGInp7JSAFfAqh3DuEx0kwKF+DqTFUZLg+Z+t+Q+lDj1Uk/1TZlLuKpfkspP97qbiRWcAIe6CV0wASy+zi+xEjbxVt+tuuYfaGdBaeCsIkIoJQGf7MzzLmj8ibj4QIDAQABozUwMzAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQsFAAOCAQEAf77eh/hws9/ZrgWgRMIP2oYHQhZk9LJD/ewVq6emtSPPbSKxmC4EntoAwlpWWXn/rFlE/CcAJEphRNYhqVL8187ltO6nq/sA4BrDR87x1CUgcy8tenWbVHKE6CAOL+vUUHwY7axRnup4FSl407u9ViAEmB1l3IoDY2G9Ie4NkDn6uBBgmwdpQOr7WnT9G0gxcrcXRKYHMj8aYWcwqQ6RATgsI/y3u+nXfbMhsRAecWvklyv0WYFX94A5GieiqGEXVQ3BzEux+vcdBjmUsDP3qfVg/+d9p5mIIaHWI579ZPx+4U/KF1jgyAXIFhVAr2AkxhlwJBM+/rBsZvUH8dfG+Q==-----END CERTIFICATE-----")
+// 	keyData, _  = b64.StdEncoding.DecodeString("-----BEGIN RSA PRIVATE KEY-----MIIEpQIBAAKCAQEAuw1gaKFz6UVPEA5XJuCgU4+FWZgOx70Zq3+NKr3yEGVJ2s8Wu7WV8YpDTkekjg9Y9+k6NEHoNvDlubuAzqgbJhHnQlD+hLmMsz+uALCdclNdiBzQjr9P7HB4YpGgTueTaoDOMCECGwt69yyBrgo5lawgF/4dRNmsxtfVcCYIAPuc3bUaXO4pC/C/eMTW1Ck5cFUYYZgY23pPKh7sWGfMi0srArGInp7JSAFfAqh3DuEx0kwKF+DqTFUZLg+Z+t+Q+lDj1Uk/1TZlLuKpfkspP97qbiRWcAIe6CV0wASy+zi+xEjbxVt+tuuYfaGdBaeCsIkIoJQGf7MzzLmj8ibj4QIDAQABAoIBACFHg/uZnhHGrwZgRsk39c5oHoWONDL9Re/pRahxGvwnyTgQ2C6VZBQRUWBABtrviBizehOKFlKQEY81+PjLl+jyDn8SAfaDPLE3hzHAOoL4qg9pcQG0r/eVGxYOasMfGG8+c3DErqc5J6uKU5gvYYdrlFowb+yr/b1y8Rp+6bWiwGJxdQBfMCWuNQS3npjFppT7G7fGRtSVasd03e/dKE315sNwT2RlM7svdPGGC2Oa77alG3WsnzkITCrQUsmBSr3tJ7pVNxT1luVr3VE1NX4jPARC6zhB87mjMFqIOGQsjFhhwi2tWIuJzSqYdCYtxfDL341p6+QAazroBKSmFzECgYEAyMtCgjN6/XIBJ50/szjKG4BOmIKeUySskTYt/JJwwkEOcWqqTqrq+Ygu9CmoWbo5ARimd1+Tf7+cCQnUYva4FOiw1tbQcDA23gXG7u3fCQC5/BMtf1DmN2iLKvFTSJ1F2YSzk+sZ8GtS6zr6tIG/3ObFcmGDHRS6jtQi/Y99XO8CgYEA7nrqODh2lX6/UeMlhDO8ksU4GnYpI4hXMmKaqkpVAXB6n5G5tJ+OZZCBAQBHZ9rim05PjK/ep0ky2GTx78C0m8okAqRvHqLgLcenThS2zYh1l4LFUgCFd1v4kKRDORck2sb1NqbkEJpon3ax02FZSUFsz73ColP0iJ6We/PybC8CgYEAtFx/3VxIuafSCbdiJKZ6RMG3155cgOqMZ9N280zHJHYzdwUM/aThdEszgfZ5Vj/EPIvb25Zqc3G1wxilQk/DgmSRlClZCa0FW+Fsk+nvUbLpXNgNIjOU12h8uZIT8UH0IDLm65NetWpyDQHpeIKjyNUxvlCA6XpZKTq8Q27EeNkCgYEA6yAG441P5Y8ExJDGwXRc/Pwzl2tenijjh8rOIQ2OiA/E5qS/ysTxmVOCzWDgBhY6C9OG/Pe894Rk/BNyseZ2a48+N9i1sif2DUzmuEYWAckD33DQaUwYSxlDliBOIvCdppI43DxpabFDa82UAAvgAyjdRmkah/9sfnKVffqDzoMCgYEAsF5+iagZltunlYwg2BQ0tDn1aveLfpJuzy4chygGfADGH4GLkq88sjeTLkrNRl8VrHZ+vENqSL7r4Oye4rK59W63mnjBE/Xeh7b6IXvmus624cpgyiz0VSpKCj098cuJgp/2S95QUVxqZ/6vULFAfZqJe47kHaVYD8qub5N4AIg=-----END RSA PRIVATE KEY-----")
+// 	// validCert   *tls.Certificate
+// 	cert *x509.Certificate
+// 	key  *rsa.PrivateKey
+// )
+
+// func init() {
+// 	// certExt, err := b64.StdEncoding.DecodeString("MIIC6zCCAdOgAwIBAgIQPp3pFNWcKrNGBSVdx/zMUDANBgkqhkiG9w0BAQsFADAQ\nMQ4wDAYDVQQKEwVqYWt1YjAeFw0xOTA5MTExMjQ0MDBaFw0yMjA4MjYxMjQ0MDBa\nMBwxGjAYBgNVBAoMEWpha3ViLjxib290c3RyYXA+MIIBIjANBgkqhkiG9w0BAQEF\nAAOCAQ8AMIIBCgKCAQEAuw1gaKFz6UVPEA5XJuCgU4+FWZgOx70Zq3+NKr3yEGVJ\n2s8Wu7WV8YpDTkekjg9Y9+k6NEHoNvDlubuAzqgbJhHnQlD+hLmMsz+uALCdclNd\niBzQjr9P7HB4YpGgTueTaoDOMCECGwt69yyBrgo5lawgF/4dRNmsxtfVcCYIAPuc\n3bUaXO4pC/C/eMTW1Ck5cFUYYZgY23pPKh7sWGfMi0srArGInp7JSAFfAqh3DuEx\n0kwKF+DqTFUZLg+Z+t+Q+lDj1Uk/1TZlLuKpfkspP97qbiRWcAIe6CV0wASy+zi+\nxEjbxVt+tuuYfaGdBaeCsIkIoJQGf7MzzLmj8ibj4QIDAQABozUwMzAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADANBgkq\nhkiG9w0BAQsFAAOCAQEAf77eh/hws9/ZrgWgRMIP2oYHQhZk9LJD/ewVq6emtSPP\nbSKxmC4EntoAwlpWWXn/rFlE/CcAJEphRNYhqVL8187ltO6nq/sA4BrDR87x1CUg\ncy8tenWbVHKE6CAOL+vUUHwY7axRnup4FSl407u9ViAEmB1l3IoDY2G9Ie4NkDn6\nuBBgmwdpQOr7WnT9G0gxcrcXRKYHMj8aYWcwqQ6RATgsI/y3u+nXfbMhsRAecWvk\nlyv0WYFX94A5GieiqGEXVQ3BzEux+vcdBjmUsDP3qfVg/+d9p5mIIaHWI579ZPx+\n4U/KF1jgyAXIFhVAr2AkxhlwJBM+/rBsZvUH8dfG+Q==")
+// 	// if err != nil {
+// 	// 	fmt.Errorf("decode error: %v", err)
+// 	// }
+
+// 	var err error
+// 	cert, err = x509.ParseCertificate([]byte(certData))
+// 	if err != nil {
+// 		fmt.Errorf("parse certificate error: %v", err)
+// 	}
+
+// 	key, err = rsa.DecryptPKCS1v15 ([]byte(keyData))
+// 	// validCert := &tls.Certificate{
+// 	// 	Certificate: [][]byte{certExt},
+// 	// 	PrivateKey:  nil,
+// 	// 	// PrivateKey: &externalSigner{cert.PublicKey, cfg, protocol},
+// 	// }
+// }
+
 func init() {
+	// var err error
 	cert, err := tls.X509KeyPair(certData, keyData)
 	if err != nil {
 		panic(err)
@@ -72,6 +110,7 @@ func init() {
 		panic(err)
 	}
 	validCert = &cert
+	x509Cert = cert.Leaf
 }
 
 func TestClientCache(t *testing.T) {
@@ -127,6 +166,258 @@ func assertCacheLen(t *testing.T, cache *clientCache, length int) {
 	t.Helper()
 	if len(cache.cache) != length {
 		t.Errorf("expected cache length %d got %d", length, len(cache.cache))
+	}
+}
+
+// func fakeExecCommandSign(command string, args ...string) *exec.Cmd {
+// 	cs := []string{"-test.run=TestHelperProcessSign", "--", command}
+// 	cs = append(cs, args...)
+// 	cmd := exec.Command(os.Args[0], cs...)
+// 	return cmd
+// }
+
+func TestHelperProcessSign(t *testing.T) {
+	t.Helper()
+	if len(os.Args) < 5 {
+		t.Skip()
+	}
+
+	response := os.Args[2]
+	signRequest := os.Args[5]
+	fmt.Fprintf(os.Stderr, "Args: %s\n", signRequest)
+
+	type SignMessage struct {
+		APIVersion     string            `json:"apiVersion"`
+		Kind           string            `json:"kind"`
+		Configuration  map[string]string `json:"configuration"`
+		Digest         string            `json:"digest"`
+		SignerOptsType string            `json:"signerOptsType"`
+		SignerOpts     string            `json:"signerOpts"`
+	}
+
+	var signMessage SignMessage
+
+	err := json.Unmarshal([]byte(signRequest), &signMessage)
+	if err != nil {
+		fmt.Printf("unmarshal error: %v", err)
+		t.Fatal(err)
+		return
+	}
+
+	if signMessage.Configuration["pathLib"] == "" {
+		t.Fatal(err)
+		return
+	}
+
+	fmt.Fprintf(os.Stdout, response)
+	os.Exit(0)
+}
+
+func TestSign(t *testing.T) {
+	// type execCommandType func(command string, args ...string) *exec.Cmd
+
+	tests := []struct {
+		name     string
+		cfg      map[string]string
+		response string
+		// execCommand execCommandType
+		wantErr bool
+	}{
+		{
+			name: "correct",
+			cfg: map[string]string{
+				"pathExec":  "/path/to/externalSigner",
+				"pathLib":   "/path/to/library.so",
+				"slot-id":   "0",
+				"object-id": "2",
+			},
+			response: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"w1lLwUeKCsrMERawMpoDfMiFlf7+8OAaPvAI4/9iUZM56qroJv3uCty0HlPixaMV8Si6vszRS1CuZbpRSqbwg6+FC6OKzd7Gkfm8zWGVi7bsMpiD9TBy7L0Gyc5FcXY5IWeXyHBw9HNNlEAOhrL1juhVu2DCEJ9QbLQ+4mHFrdHWJVN8pvvc4hHyRFv50r15fNeDs76PN9oLDrszeVswCPJuiN5IaOxO3nm1G/4EGSYDjLeynNSwuker7h8J58T1f5+OIAfeJDpQRtgCExPW4n9OnZPPL+uj2MyMqbXl5HnvrEuBY8EvqiY2Uc2Nte9uTHqpQHagrFU4bn4nhK+Qug==\"}",
+			// execCommand: func(command string, args ...string) *exec.Cmd {
+			// 	response := "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"w1lLwUeKCsrMERawMpoDfMiFlf7+8OAaPvAI4/9iUZM56qroJv3uCty0HlPixaMV8Si6vszRS1CuZbpRSqbwg6+FC6OKzd7Gkfm8zWGVi7bsMpiD9TBy7L0Gyc5FcXY5IWeXyHBw9HNNlEAOhrL1juhVu2DCEJ9QbLQ+4mHFrdHWJVN8pvvc4hHyRFv50r15fNeDs76PN9oLDrszeVswCPJuiN5IaOxO3nm1G/4EGSYDjLeynNSwuker7h8J58T1f5+OIAfeJDpQRtgCExPW4n9OnZPPL+uj2MyMqbXl5HnvrEuBY8EvqiY2Uc2Nte9uTHqpQHagrFU4bn4nhK+Qug==\"}"
+			// 	cs := []string{"-test.run=TestHelperProcessSign", response, "--", command}
+			// 	cs = append(cs, args...)
+			// 	cmd := exec.Command(os.Args[0], cs...)
+			// 	return cmd
+			// },
+		},
+		{
+			name:     "missingConfig",
+			cfg:      map[string]string{},
+			response: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"w1lLwUeKCsrMERawMpoDfMiFlf7+8OAaPvAI4/9iUZM56qroJv3uCty0HlPixaMV8Si6vszRS1CuZbpRSqbwg6+FC6OKzd7Gkfm8zWGVi7bsMpiD9TBy7L0Gyc5FcXY5IWeXyHBw9HNNlEAOhrL1juhVu2DCEJ9QbLQ+4mHFrdHWJVN8pvvc4hHyRFv50r15fNeDs76PN9oLDrszeVswCPJuiN5IaOxO3nm1G/4EGSYDjLeynNSwuker7h8J58T1f5+OIAfeJDpQRtgCExPW4n9OnZPPL+uj2MyMqbXl5HnvrEuBY8EvqiY2Uc2Nte9uTHqpQHagrFU4bn4nhK+Qug==\"}",
+			wantErr:  true,
+		},
+		{
+			name: "missingSignature",
+			cfg: map[string]string{
+				"pathExec":  "/path/to/externalSigner",
+				"pathLib":   "/path/to/library.so",
+				"slot-id":   "0",
+				"object-id": "2",
+			},
+			response: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\"}",
+			wantErr:  true,
+		},
+		{
+			name: "malformedSignature",
+			cfg: map[string]string{
+				"pathExec":  "/path/to/externalSigner",
+				"pathLib":   "/path/to/library.so",
+				"slot-id":   "0",
+				"object-id": "2",
+			},
+			response: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"w1lLwUeKCsrMERawMpoDfMiFlf7+8OAaPvAI4/9iUZM56qroJv3uCty0HlPixaMV8Si6vszRS1CuZbpRSqbwg6+FC6OKzd7Gkfm8zWGVi7bsMpiD9TBy7L0Gyc5FcXY5IWeXyHBw9HNNlEAOhrL1juhVu2DCEJ9QbLQ+4mHFrdHWJVN8pvvc4hHyRFv50r15fNeDs76PN9oLDrszeVswCPJuiN5IaOxO3nm1G/4EGSYDjLeynNSwuker7h8J58T1f5+OIAfeJDpQRtgCExPW4n9OnZPPL+uj2MyMqbXl5HnvrEuBY8EvqiY2Uc2Nte9uTHqpQHagrFU4bn4nhK+Qug\"}",
+			wantErr:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// cfg := map[string]string{
+			// 	"pathExec":  "/path/to/externalSigner",
+			// 	"pathLib":   "/path/to/library.so",
+			// 	"slot-id":   "0",
+			// 	"object-id": "2",
+			// }
+			signer := externalSigner{x509Cert.PublicKey, test.cfg}
+
+			var rand io.Reader
+			var digest []byte
+
+			signerOptsString := "{\"SaltLength\":-1,\"Hash\":5}"
+			var pSSOptions rsa.PSSOptions
+			err := json.Unmarshal([]byte(signerOptsString), &pSSOptions)
+			if err != nil {
+				fmt.Printf("Unmarshal error: %s\n", err)
+			}
+
+			rand = nil
+			digest = nil
+
+			// execCommand = test.execCommand
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcessSign", test.response, "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				return cmd
+			}
+
+			signature, err := signer.Sign(rand, digest, &pSSOptions)
+			if err != nil {
+				fmt.Printf("Error: %s\n", err)
+				if !test.wantErr {
+					t.Fatal(err)
+				}
+				return
+			}
+			if signature == nil || string(signature) == "" {
+				fmt.Printf("Signature is nil\n")
+				if !test.wantErr {
+					t.Fatal(err)
+				}
+				return
+			}
+			if test.wantErr {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+// func fakeExecCommandGetCertificate(command string, args ...string) *exec.Cmd {
+// 	cs := []string{"-test.run=TestHelperProcessGetCertificate", "--", command}
+// 	cs = append(cs, args...)
+// 	cmd := exec.Command(os.Args[0], cs...)
+// 	return cmd
+// }
+
+func TestHelperProcessGetCertificate(t *testing.T) {
+	t.Helper()
+	if len(os.Args) < 5 {
+		t.Skip()
+	}
+
+	response := os.Args[2]
+	certificateRequest := os.Args[5]
+	fmt.Fprintf(os.Stderr, "Args: %s\n", certificateRequest)
+	fmt.Fprintf(os.Stdout, response)
+	os.Exit(0)
+}
+
+func TestGetCertificate(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      map[string]string
+		response string
+		wantErr  bool
+	}{
+		{
+			name: "correct",
+			cfg: map[string]string{
+				"pathExec":  "/path/to/externalSigner",
+				"pathLib":   "/path/to/library.so",
+				"slot-id":   "0",
+				"object-id": "2",
+			},
+			response: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"MIIDADCCAeigAwIBAgIBAjANBgkqhkiG9w0BAQsFADAVMRMwEQYDVQQDEwptaW5pa3ViZUNBMB4XDTIwMDQxMzEzMDQyNVoXDTIxMDQxNDEzMDQyNVowMTEXMBUGA1UEChMOc3lzdGVtOm1hc3RlcnMxFjAUBgNVBAMTDW1pbmlrdWJlLXVzZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDrMKV03/EKwgpOBIDvRFOxDEFBcCxuwrWva5GiZWh3UhLRTDZfeFgxeMYUo/bX0o1D/aDCgd0k1eTmA6ANchAldjjnxsvEiWZDWdu9tDQnmHP3dM4Zp14k7KrfNkG50eFXzIl9oIuAo5GDaeXydTufniLOaKor1uuk322Ms7rwci8DOz6LTXG6n6J8XL2U5b3gTFyBdkt08Uh0N/NhnuotOLyuAeGjJuTriHemyv0jT09twbEQtKhIvu4tyJ/C421PX+J3tgR63lkzQ3C98D5p1sYJseEQa8GXtQ9he08Uqh51roAvmoPhxguA7AuAgy/vAV1sfpCtei6Q68T4PrKDAgMBAAGjPzA9MA4GA1UdDwEB/wQEAwIFoDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQsFAAOCAQEAO9l9BxUB1UIACOvs23ONdsd71iKZczyC+D5fp4O159+azMfCisek2DaJHJpWPeZQEl/auGsMj15bEV+rECqtNpngHE2ywee3iJfWCnv41mGx+y5KcDDfl5C1lHxg+JYbIDc4KSSBdK6mdn0TvN6sl5bpT6wyxlxD2ln5z2B+NUkggSknljrm/nf7/nv5BWK+i4oG1XsuGhrGy8Yi4TFO5s2COh8ce3ToERv9BdxN/5N2UPNVOpM3dTPLgntzPIqgiLiGe0asENIrb8uwqVZdIGx2C3Blemv0kwwISWVLs+ouBJHS07uAlEfwDIaxn0z70We52oMM2vM0lR6orvgMvQ==\"}",
+		},
+		{
+			name: "missingPathExec",
+			cfg: map[string]string{
+				"pathLib":   "/path/to/library.so",
+				"slot-id":   "0",
+				"object-id": "2",
+			},
+			response: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"MIIDADCCAeigAwIBAgIBAjANBgkqhkiG9w0BAQsFADAVMRMwEQYDVQQDEwptaW5pa3ViZUNBMB4XDTIwMDQxMzEzMDQyNVoXDTIxMDQxNDEzMDQyNVowMTEXMBUGA1UEChMOc3lzdGVtOm1hc3RlcnMxFjAUBgNVBAMTDW1pbmlrdWJlLXVzZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDrMKV03/EKwgpOBIDvRFOxDEFBcCxuwrWva5GiZWh3UhLRTDZfeFgxeMYUo/bX0o1D/aDCgd0k1eTmA6ANchAldjjnxsvEiWZDWdu9tDQnmHP3dM4Zp14k7KrfNkG50eFXzIl9oIuAo5GDaeXydTufniLOaKor1uuk322Ms7rwci8DOz6LTXG6n6J8XL2U5b3gTFyBdkt08Uh0N/NhnuotOLyuAeGjJuTriHemyv0jT09twbEQtKhIvu4tyJ/C421PX+J3tgR63lkzQ3C98D5p1sYJseEQa8GXtQ9he08Uqh51roAvmoPhxguA7AuAgy/vAV1sfpCtei6Q68T4PrKDAgMBAAGjPzA9MA4GA1UdDwEB/wQEAwIFoDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQsFAAOCAQEAO9l9BxUB1UIACOvs23ONdsd71iKZczyC+D5fp4O159+azMfCisek2DaJHJpWPeZQEl/auGsMj15bEV+rECqtNpngHE2ywee3iJfWCnv41mGx+y5KcDDfl5C1lHxg+JYbIDc4KSSBdK6mdn0TvN6sl5bpT6wyxlxD2ln5z2B+NUkggSknljrm/nf7/nv5BWK+i4oG1XsuGhrGy8Yi4TFO5s2COh8ce3ToERv9BdxN/5N2UPNVOpM3dTPLgntzPIqgiLiGe0asENIrb8uwqVZdIGx2C3Blemv0kwwISWVLs+ouBJHS07uAlEfwDIaxn0z70We52oMM2vM0lR6orvgMvQ==\"}",
+			wantErr:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// cfg := map[string]string{
+			// 	"pathExec":  "/path/to/externalSigner",
+			// 	"pathLib":   "/path/to/library.so",
+			// 	"slot-id":   "0",
+			// 	"object-id": "2",
+			// }
+
+			var clusterAddress string
+			var persister restclient.AuthProviderConfigPersister
+
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcessGetCertificate", test.response, "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				return cmd
+			}
+
+			// var authenticator *Authenticator
+			// var err error
+
+			_, err := newExternalSignerAuthProvider(clusterAddress, test.cfg, persister)
+			if err != nil {
+				fmt.Printf("Error: %s\n", err)
+				if !test.wantErr {
+					t.Fatal(err)
+				}
+				return
+			}
+			if test.wantErr {
+				t.Fatal("expected error")
+			}
+
+			// authenticator = *provider
+
+			// if authenticator.tlsCert == nil {
+			// 	fmt.Printf("Error: %s\n", err)
+			// }
+
+			// fmt.Printf("Stderr: %s\n", stderr.String())
+			// fmt.Printf("Stdin: %s\n", stdin)
+			// fmt.Printf("Stdout: %s\n", stdout)
+
+			// (restclient.AuthProvider, error) :=
+		})
 	}
 }
 

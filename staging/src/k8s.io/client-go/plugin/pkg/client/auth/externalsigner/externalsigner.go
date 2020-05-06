@@ -38,6 +38,7 @@ import (
 
 	// "runtime/debug"
 
+	"k8s.io/apiserver/pkg/authentication/authenticator"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/transport"
 	"k8s.io/klog"
@@ -47,13 +48,15 @@ const (
 	cfgPathExec = "pathExec"
 )
 
+var cache = newClientCache()
+
+var execCommand = exec.Command
+
 func init() {
 	if err := restclient.RegisterAuthProviderPlugin("externalSigner", newExternalSignerAuthProvider); err != nil {
 		klog.Fatalf("Failed to register externalSigner auth plugin: %v", err)
 	}
 }
-
-var cache = newClientCache()
 
 type clientCache struct {
 	mu sync.RWMutex
@@ -79,7 +82,6 @@ func (c *clientCache) getClient(cfg map[string]string) (*Authenticator, bool) {
 
 // setClient attempts to put the client in the cache but may return any clients
 // with the same keys set before. This is so there's only ever one client for a provider.
-// func (c *clientCache) setClient(path, slotID, objectID string, client *Authenticator) *Authenticator {
 func (c *clientCache) setClient(cfg map[string]string, client *Authenticator) *Authenticator {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -125,7 +127,10 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 
 	// fmt.Printf("TypeOf(crypto.SignerOpts): %s\n", reflect.TypeOf(opts))
 
-	signerOptsString, _ := json.Marshal(opts)
+	signerOptsString, err := json.Marshal(opts)
+	if err != nil {
+		return nil, fmt.Errorf("opts marshal error: %v", err)
+	}
 
 	config := ConfigMessage{
 		APIVersion:    "external-signer.authentication.k8s.io/v1alpha1",
@@ -137,11 +142,16 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 		SignerOpts:     string(signerOptsString),
 	}
 
-	b, _ := json.Marshal(config)
+	b, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("marshal error: %v", err)
+	}
 
 	fmt.Printf("Sing request : %s\n", string(b))
 
-	cmd := exec.Command(priv.cfg[cfgPathExec], string(b))
+	// cmd := exec.Command(priv.cfg[cfgPathExec], string(b))
+	cmd := execCommand(priv.cfg[cfgPathExec], string(b))
+
 	// cmd := exec.Command(priv.cfg[cfgPathExec])
 	// buffer := bytes.Buffer{}
 	// buffer.Write(b)
@@ -149,8 +159,8 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 	// buffer.WriteString("\n")
 	// cmd.Stdin = &buffer
 	// cmd.Stdin = bytes.NewBuffer(b)
-	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 
 	// grepIn, _ := cmd.StdinPipe()
@@ -162,7 +172,7 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 	// cmd.Wait()
 
 	if err != nil {
-		return nil, fmt.Errorf("exec: %v", err)
+		return nil, fmt.Errorf("execution error: %v", err)
 	}
 	fmt.Printf("Sign response: %s\n", string(out))
 
@@ -176,7 +186,7 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 
 	err = json.Unmarshal([]byte(out), &record)
 	if err != nil {
-		return nil, fmt.Errorf("exec: %v", err)
+		return nil, fmt.Errorf("unmarshal error: %v", err)
 	}
 	signature, err = b64.StdEncoding.DecodeString(record.Signature)
 	return
@@ -198,9 +208,6 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 		return nil, fmt.Errorf("Must provide %s", cfgPathExec)
 	}
 
-	// pinString := cfg[cfgPIN]
-	// fmt.Printf("pinString: %s\n", pinString)
-
 	if provider, ok := cache.getClient(cfg); ok {
 		return provider, nil
 	}
@@ -211,10 +218,14 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 		Configuration: cfg,
 	}
 
-	b, _ := json.Marshal(config)
-	fmt.Printf("Crertificate request: %s\n", string(b))
+	b, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("marshal error: %v", err)
+	}
+	fmt.Printf("Certificate request: %s\n", string(b))
 
-	cmd := exec.Command(cfg[cfgPathExec], string(b))
+	// cmd := exec.Command(cfg[cfgPathExec], string(b))
+	cmd := execCommand(cfg[cfgPathExec], string(b))
 	// cmd := exec.Command(cfg[cfgPathExec])
 	// buffer := bytes.Buffer{}
 	// buffer.Write(b)
@@ -237,7 +248,7 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 
 	// fmt.Printf("External certificate output: %s\n", out)
 	if err != nil {
-		return nil, fmt.Errorf("exec: %v", err)
+		return nil, fmt.Errorf("execution error: %v", err)
 	}
 	fmt.Printf("Certificate response: %s\n", string(out))
 
@@ -252,16 +263,18 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 
 	err = json.Unmarshal([]byte(out), &record)
 	if err != nil {
-		return nil, fmt.Errorf("exec: %v", err)
+		return nil, fmt.Errorf("unmarshal error: %v", err)
 	}
 
 	certExt, err := b64.StdEncoding.DecodeString(record.Certificate)
-
-	cert, certErr := x509.ParseCertificate([]byte(certExt))
-	if certErr != nil {
-		fmt.Printf("Error: %s\n", certErr)
+	if err != nil {
+		return nil, fmt.Errorf("decode error: %v", err)
 	}
 
+	cert, err := x509.ParseCertificate([]byte(certExt))
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate error: %v", err)
+	}
 	tlsCert := &tls.Certificate{
 		Certificate: [][]byte{certExt},
 		PrivateKey:  &externalSigner{cert.PublicKey, cfg},
@@ -272,12 +285,15 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 		tlsCert: tlsCert,
 	}
 
-	// return cache.setClient(path, slotIDString, objectIDString, provider), nil
 	return cache.setClient(cfg, provider), nil
 }
 
 type Authenticator struct {
 	tlsCert *tls.Certificate
+}
+
+func (p *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.Response, bool, error) {
+	return nil, true, nil
 }
 
 func (p *Authenticator) Login() error {
