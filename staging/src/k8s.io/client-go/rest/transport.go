@@ -108,6 +108,11 @@ func (c *Config) TransportConfig() (*transport.Config, error) {
 			return nil, err
 		}
 		conf.Wrap(provider.WrapTransport)
+
+		providerTLS, ok := provider.(AuthProviderTLS)
+		if ok {
+			providerTLS.UpdateTransportConfig(conf)
+		}
 	}
 	return conf, nil
 }
