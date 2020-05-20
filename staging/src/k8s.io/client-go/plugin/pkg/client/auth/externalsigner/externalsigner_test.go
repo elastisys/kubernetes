@@ -2,6 +2,8 @@ package externalsigner
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -9,16 +11,21 @@ import (
 	"crypto/x509/pkix"
 	b64 "encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
 	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/transport"
 )
 
 var (
@@ -71,6 +78,7 @@ stR0Yiw0buV6DL/moUO0HIM9Bjh96HJp+LxiIS6UCdIhMPp5HoQa
 )
 
 func init() {
+	// fmt.Printf("\n!!!! INIT !!!!\n")
 	cert, err := tls.X509KeyPair(certData, keyData)
 	if err != nil {
 		panic(err)
@@ -145,9 +153,8 @@ func TestHelperProcessSign(t *testing.T) {
 	}
 
 	response := os.Args[2]
-	// signRequest := os.Args[5]
 	signRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
-	fmt.Fprintf(os.Stderr, "Args: %s\n", signRequest)
+	// fmt.Fprintf(os.Stderr, "Args: %s\n", signRequest)
 
 	type SignMessage struct {
 		APIVersion     string            `json:"apiVersion"`
@@ -234,7 +241,8 @@ func TestSign(t *testing.T) {
 			var pSSOptions rsa.PSSOptions
 			err := json.Unmarshal([]byte(signerOptsString), &pSSOptions)
 			if err != nil {
-				fmt.Printf("Unmarshal error: %s\n", err)
+				// fmt.Printf("Unmarshal error: %s\n", err)
+				t.Fatal(err)
 			}
 
 			rand = nil
@@ -256,7 +264,7 @@ func TestSign(t *testing.T) {
 				return
 			}
 			if signature == nil || string(signature) == "" {
-				fmt.Printf("Signature is nil\n")
+				// fmt.Printf("Signature is nil\n")
 				if !test.wantErr {
 					t.Fatal(err)
 				}
@@ -270,21 +278,21 @@ func TestSign(t *testing.T) {
 }
 
 func TestHelperProcessGetCertificate(t *testing.T) {
-	t.Helper()
+	// fmt.Fprintf(os.Stderr, "HELPER: TestHelperProcessGetCertificate, args: %d\n", len(os.Args))
+	// t.Helper()
 	if len(os.Args) < 5 {
 		t.Skip()
 	}
 
 	response := os.Args[2]
-	certificateRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
-	// certificateRequest := os.Args[5]
-	fmt.Fprintf(os.Stderr, "Args: %s\n", certificateRequest)
+	// certificateRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
+	// fmt.Fprintf(os.Stderr, "Args: %s\n", certificateRequest)
 	fmt.Fprintf(os.Stdout, response)
 	os.Exit(0)
 }
 
 func TestGetCertificate(t *testing.T) {
-	tests := []struct {
+	certTests := []struct {
 		name     string
 		cfg      map[string]string
 		response string
@@ -312,73 +320,118 @@ func TestGetCertificate(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-
+	for _, certTest := range certTests {
+		t.Run(certTest.name, func(t *testing.T) {
+			t.Log(certTest.response)
 			var clusterAddress string
 			var persister restclient.AuthProviderConfigPersister
 
 			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestHelperProcessGetCertificate", test.response, "--", command}
+				cs := []string{"-test.run=TestHelperProcessGetCertificate", certTest.response, "--", command}
 				cs = append(cs, args...)
 				cmd := exec.Command(os.Args[0], cs...)
 				return cmd
 			}
 
-			// var authenticator *Authenticator
-			// var err error
-
-			// provider, err := newExternalSignerAuthProvider(clusterAddress, test.cfg, persister)
-			_, err := newExternalSignerAuthProvider(clusterAddress, test.cfg, persister)
+			provider, err := newExternalSignerAuthProvider(clusterAddress, certTest.cfg, persister)
 			if err != nil {
 				fmt.Printf("Error: %s\n", err)
-				if !test.wantErr {
+				if !certTest.wantErr {
 					t.Fatal(err)
 				}
 				return
 			}
-			if test.wantErr {
+			if certTest.wantErr {
 				t.Fatal("expected error")
 			}
 
-			// authenticator = *provider
+			var authenticator *Authenticator
+			authenticator = provider.(*Authenticator)
 
-			// if authenticator.tlsCert == nil {
-			// 	fmt.Printf("Error: %s\n", err)
+			if authenticator.tlsCert == nil {
+				t.Fatal(err)
+				// fmt.Printf("Error: %s\n", err)
+			}
+
+			// b, err := json.Marshal(authenticator.tlsCert)
+			// if err != nil {
+			// 	fmt.Printf("marshal error: %v", err)
 			// }
-
-			// fmt.Printf("Stderr: %s\n", stderr.String())
-			// fmt.Printf("Stdin: %s\n", stdin)
-			// fmt.Printf("Stdout: %s\n", stdout)
-
-			// (restclient.AuthProvider, error) :=
+			// fmt.Printf("TLS certificate: %s\n", string(b))
 		})
 	}
 }
 
-func TestHelperProcessGetCertificateRSA(t *testing.T) {
-	t.Helper()
+func TestHelperProcessSignatureVerification(t *testing.T) {
+	// fmt.Fprintf(os.Stderr, "HELPER: TestHelperProcess, args: %d\n", len(os.Args))
+
 	if len(os.Args) < 5 {
 		t.Skip()
 	}
 
-	response := os.Args[2]
-	certificateRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
-	fmt.Fprintf(os.Stderr, "Args: %s\n", certificateRequest)
+	request := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
+	fmt.Fprintf(os.Stderr, "Env: %s\n", request)
+
+	type RequestMessage struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+	}
+
+	var requestMessage RequestMessage
+
+	err := json.Unmarshal([]byte(request), &requestMessage)
+	if err != nil {
+		// fmt.Printf("unmarshal error: %v", err)
+		t.Fatalf("Unmarshal error: %s\n", err)
+		return
+	}
+
+	if requestMessage.Kind == "" {
+		t.Fatal(err)
+		return
+	}
+
+	var response string
+
+	switch requestMessage.Kind {
+	case "Certificate":
+		response = os.Args[2]
+	case "Sign":
+		response = os.Args[3]
+	default:
+		t.Fatalf("Response for Kind %s is not implemented", requestMessage.Kind)
+		return
+	}
+
+	// fmt.Fprintf(os.Stderr, "%s\n", response)
 	fmt.Fprintf(os.Stdout, response)
 	os.Exit(0)
 }
 
-func TestHelperProcessSignRSA(t *testing.T) {
-	t.Helper()
+func TestHelperProcessSignatureVerificationGetCertificate(t *testing.T) {
+	// fmt.Fprintf(os.Stderr, "HELPER: TestHelperProcessSignatureVerificationGetCertificate, args: %d\n", len(os.Args))
+	// t.Helper()
 	if len(os.Args) < 5 {
 		t.Skip()
 	}
 
 	response := os.Args[2]
-	// signRequest := os.Args[5]
+	// signatureRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
+	// fmt.Fprintf(os.Stderr, "Args: %s\n", signatureRequest)
+	fmt.Fprintf(os.Stdout, response)
+	os.Exit(0)
+}
+
+func TestHelperProcessSignatureVerificationSign(t *testing.T) {
+	// fmt.Fprintf(os.Stderr, "HELPER: TestHelperProcessSignatureVerificationSign, args: %d\n", len(os.Args))
+	// t.Helper()
+	if len(os.Args) < 5 {
+		t.Skip()
+	}
+
+	response := os.Args[2]
 	signRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
-	fmt.Fprintf(os.Stderr, "Args: %s\n", signRequest)
+	// fmt.Fprintf(os.Stderr, "Args: %s\n", signRequest)
 
 	type SignMessage struct {
 		APIVersion     string            `json:"apiVersion"`
@@ -393,10 +446,14 @@ func TestHelperProcessSignRSA(t *testing.T) {
 
 	err := json.Unmarshal([]byte(signRequest), &signMessage)
 	if err != nil {
-		fmt.Printf("unmarshal error: %v", err)
-		t.Fatal(err)
+		// fmt.Printf("unmarshal error: %v", err)
+		t.Fatalf("Unmarshal error: %s\n", err)
 		return
 	}
+
+	digest, err := b64.StdEncoding.DecodeString(signMessage.Digest)
+
+	fmt.Printf("DIGEST: %s\n", string(digest))
 
 	if signMessage.Configuration["pathLib"] == "" {
 		t.Fatal(err)
@@ -407,48 +464,13 @@ func TestHelperProcessSignRSA(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestRoundTrip(t *testing.T) {
+func TestSignatureVerification(t *testing.T) {
+
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-
-	// err = privKey.Validate()
-	// if err != nil {
-	// 	fmt.Println(err)
-	// 	return
-	// }
-
-	// pubDER := x509.MarshalPKCS1PublicKey(&privKey.PublicKey)
-
-	// pubBlock := pem.Block{
-	// 	Type:    "PUBLIC KEY",
-	// 	Headers: nil,
-	// 	Bytes:   pubDER,
-	// }
-
-	// pubPEM := pem.EncodeToMemory(&pubBlock)
-
-	// fmt.Printf("pubPEM: %s\n", b64.StdEncoding.EncodeToString(pubPEM))
-
-	// privDER := x509.MarshalPKCS1PrivateKey(privKey)
-
-	// privBlock := pem.Block{
-	// 	Type:    "RSA PRIVATE KEY",
-	// 	Headers: nil,
-	// 	Bytes:   privDER,
-	// }
-
-	// privatePEM := pem.EncodeToMemory(&privBlock)
-
-	// fmt.Printf("privatePEM: %s\n", b64.StdEncoding.EncodeToString(privatePEM))
-
-	// block, _ := pem.Decode([]byte(pubPEM))
-	// if block == nil {
-	// 	fmt.Println("Invalid PEM Block")
-	// 	return
-	// }
 
 	message := []byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.")
 
@@ -465,7 +487,7 @@ func TestRoundTrip(t *testing.T) {
 
 	signature, err := rsa.SignPSS(rand.Reader, privKey, newhash, hashed, &opts)
 
-	cert := &x509.Certificate{
+	certificate := &x509.Certificate{
 		SerialNumber: big.NewInt(2019),
 		Subject: pkix.Name{
 			Organization: []string{"Company, INC."},
@@ -497,27 +519,23 @@ func TestRoundTrip(t *testing.T) {
 		return
 	}
 
-	certBytes, err := x509.CreateCertificate(rand.Reader, cert, ca, &privKey.PublicKey, caPrivKey)
+	certBytes, err := x509.CreateCertificate(rand.Reader, certificate, ca, privKey.Public(), caPrivKey)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-
-	b, err := json.Marshal(cert)
-	if err != nil {
-		fmt.Errorf("marshal error: %v", err)
-	}
-	fmt.Printf("Certificate: %s\n", string(b))
 
 	tests := []struct {
 		name                   string
 		cfg                    map[string]string
 		responseGetCertificate string
 		responseSign           string
-		wantErr                bool
+		wantCertErr            bool
+		wantSignErr            bool
+		wantVerifErr           bool
 	}{
 		{
-			name: "correct",
+			name: "verificationShouldSucceed",
 			cfg: map[string]string{
 				"pathExec":  "/path/to/externalSigner",
 				"pathLib":   "/path/to/library.so",
@@ -527,41 +545,67 @@ func TestRoundTrip(t *testing.T) {
 			responseGetCertificate: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(certBytes) + "\"}",
 			responseSign:           "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"" + b64.StdEncoding.EncodeToString(signature) + "\"}",
 		},
+		{
+			name: "verificationShouldFail",
+			cfg: map[string]string{
+				"pathExec":  "/path/to/externalSigner",
+				"pathLib":   "/path/to/library.so",
+				"slot-id":   "0",
+				"object-id": "2",
+			},
+			responseGetCertificate: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(certBytes) + "\"}",
+			responseSign:           "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"18IHTFq1MHoF7cvyQETVFipuKTGWQdmCYUIUggHEVGMEuJ5l/8wM2vABgRIxJdv5q5Bg7gCZvmAXtOO4/uP7bq7cazZ7TSuVNFPgsfLx0mKUvm1SLVpRkqQPah8CNt5YsH+WxthTFg/U86pD+Mi7j1kkB8PXnB23Pe1H2nmFPjNxneehCZSpyKFD9TRXwlkud0jQdwlFZzh9cZSZ8blNQBN8iBCJ8/KpLgpvxq7DYQW/mLzaieBg1OKwUfCCPAwhbaxjWygzzztOgQ15aVX9fVq53iUuhhB0vjX3I2kXEIdJXlH//UwhQZWQuXFI8F689vfkyY3psJpFFAqLKxXAbw==\"}",
+			wantVerifErr:           true,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Log(test.responseGetCertificate)
 			var clusterAddress string
 			var persister restclient.AuthProviderConfigPersister
 
+			// fmt.Printf("Before set execCommand\n")
 			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestHelperProcessGetCertificateRSA", test.responseGetCertificate, "--", command}
+				cs := []string{"-test.run=TestHelperProcessSignatureVerificationGetCertificate", test.responseGetCertificate, "--", command}
+				// cs := []string{"-test.run=TestHelperProcessSignatureVerification", test.responseGetCertificate, test.responseSign, "--", command}
 				cs = append(cs, args...)
 				cmd := exec.Command(os.Args[0], cs...)
 				return cmd
 			}
+			// fmt.Printf("After set execCommand\n")
+			// helperResponse = *test.responseGetCertificate
+			// fmt.Fprintf(os.Stderr, "TEST: response: %v\n", helperResponse)
 
-			auth, err := newExternalSignerAuthProvider(clusterAddress, test.cfg, persister)
+			provider, err := newExternalSignerAuthProvider(clusterAddress, test.cfg, persister)
 			if err != nil {
 				fmt.Printf("Error: %s\n", err)
-				if !test.wantErr {
+				if !test.wantCertErr {
 					t.Fatal(err)
 				}
 				return
 			}
+			// fmt.Printf("After newExternalSignerAuthProvider\n")
 
-			if test.wantErr {
-				t.Fatal("expected error")
+			if test.wantCertErr {
+				t.Fatal("expected get certificate error")
 			}
 
-			b, err := json.Marshal(auth)
+			var authenticator *Authenticator
+			authenticator = provider.(*Authenticator)
+
+			if authenticator.tlsCert == nil {
+				t.Fatalf("Error: %s\n", err)
+				return
+			}
+
+			certParsed, err := x509.ParseCertificate(authenticator.tlsCert.Certificate[0])
 			if err != nil {
-				fmt.Errorf("marshal error: %v", err)
+				t.Fatalf("parse certificate error: %v", err)
+				return
 			}
-			fmt.Printf("authenticator: %s\n", string(b))
 
-			// signer := externalSigner{x509Cert.PublicKey, test.cfg}
-			signer := externalSigner{privKey.PublicKey, test.cfg}
+			signer := externalSigner{certParsed.PublicKey, test.cfg}
 
 			var rand io.Reader
 			var digest []byte
@@ -570,31 +614,628 @@ func TestRoundTrip(t *testing.T) {
 			var pSSOptions rsa.PSSOptions
 			err = json.Unmarshal([]byte(signerOptsString), &pSSOptions)
 			if err != nil {
-				fmt.Printf("Unmarshal error: %s\n", err)
+				t.Fatalf("Unmarshal error: %s\n", err)
+				return
 			}
 
 			rand = nil
-			digest = nil
+			digest = []byte("Zd0PQ68EirC6Ebw43KBjqpCcv/yPyMT1eUOQZDkEuug=")
 
-			// execCommand = test.execCommand
 			execCommand = func(command string, args ...string) *exec.Cmd {
-				csSign := []string{"-test.run=TestHelperProcessSignRSA", test.responseSign, "--", command}
+				csSign := []string{"-test.run=TestHelperProcessSignatureVerificationSign", test.responseSign, "--", command}
 				csSign = append(csSign, args...)
 				cmdSign := exec.Command(os.Args[0], csSign...)
 				return cmdSign
 			}
+			// helperResponse = &test.responseSign
+			// fmt.Fprintf(os.Stderr, "TEST: response: %v\n", helperResponse)
 
 			signatureExt, err := signer.Sign(rand, digest, &pSSOptions)
-			fmt.Printf("signatureExt: %s\n", b64.StdEncoding.EncodeToString(signatureExt))
-
-			// err = rsa.VerifyPSS(&privKey.PublicKey, newhash, hashed, signature, &opts)
-			err = rsa.VerifyPSS(&privKey.PublicKey, newhash, hashed, signatureExt, &opts)
 			if err != nil {
-				fmt.Println(err)
+				fmt.Printf("Error: %s\n", err)
+				if !test.wantSignErr {
+					t.Fatal(err)
+				}
 				return
 			}
 
-			fmt.Println("Successfully verified message with signature and public key")
+			if test.wantSignErr {
+				t.Fatal("expected signer error")
+			}
+
+			err = rsa.VerifyPSS(certParsed.PublicKey.(*rsa.PublicKey), newhash, hashed, signatureExt, &opts)
+			if err != nil {
+				fmt.Printf("Error: %s\n", err)
+				if !test.wantVerifErr {
+					t.Fatal(err)
+				}
+				return
+			}
+
+			if test.wantVerifErr {
+				t.Fatal("expected verification error")
+			}
+
+			// fmt.Fprintf(os.Stderr, "Successfully verified message with signature and public key")
 		})
 	}
+}
+
+func TestTLSCredentialsCA(t *testing.T) {
+	// now := time.Now()
+
+	certPool := x509.NewCertPool()
+	// // cert, key := genClientCert(t)
+
+	// cliPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	cliPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	servPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+
+	servTmpl := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "my-server"},
+		SerialNumber: big.NewInt(2019),
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+		// DNSNames:     []string{"localhost"},
+		// DNSNames:    []string{"127.0.0.1"},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	// message := []byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.")
+
+	// opts := rsa.PSSOptions{
+	// 	SaltLength: -1,
+	// 	Hash:       crypto.SHA256.HashFunc(),
+	// }
+
+	// PSSmessage := message
+	// newhash := crypto.SHA256
+	// pssh := newhash.New()
+	// pssh.Write(PSSmessage)
+	// hashed := pssh.Sum(nil)
+
+	// signature, err := rsa.SignPSS(rand.Reader, privKey, newhash, hashed, &opts)
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+
+	cliTmpl := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject:      pkix.Name{Organization: []string{"Acme Co"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+
+	caTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2019),
+		Subject:      pkix.Name{CommonName: "my-ca"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
+		IsCA:         true,
+		// ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+
+	caPrivKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	caCertDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, caPrivKey.Public(), caPrivKey)
+	caCertPEM := pem.EncodeToMemory(&pem.Block{Bytes: caCertDER, Type: "CERTIFICATE"})
+
+	// caPrivDER, err := x509.MarshalECPrivateKey(caPriv)
+	// caPrivPEM := pem.EncodeToMemory(&pem.Block{Bytes: caPrivDER, Type: "EC PRIVATE KEY"})
+
+	caCert, err := x509.ParseCertificate(caCertDER)
+
+	cliCert, err := x509.CreateCertificate(rand.Reader, cliTmpl, caCert, cliPriv.Public(), caPrivKey)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	cliCertPEM := pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: cliCert,
+	})
+
+	// cliPrivDER := x509.MarshalPKCS1PrivateKey(cliPriv)
+	cliPrivDER, _ := x509.MarshalECPrivateKey(cliPriv)
+	cliPrivPEM := pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PRIVATE KEY", Bytes: cliPrivDER,
+	})
+	clientTLSCert, err := tls.X509KeyPair(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cliCert}), cliPrivPEM)
+
+	servCertDER, err := x509.CreateCertificate(rand.Reader, servTmpl, caCert, servPriv.Public(), caPrivKey)
+	servPrivDER := x509.MarshalPKCS1PrivateKey(servPriv)
+	servCertPEM := pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: servCertDER,
+	})
+	servPrivPEM := pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PRIVATE KEY", Bytes: servPrivDER,
+	})
+	servTLSCert, err := tls.X509KeyPair(servCertPEM, servPrivPEM)
+
+	certPool.AppendCertsFromPEM(caCertPEM)
+	certPool.AppendCertsFromPEM(cliCertPEM)
+
+	// certPool.AppendCertsFromPEM(caCertPEM)
+	// certPool.AppendCertsFromPEM()
+	// certPool.AppendCertsFromPEM(caCertPEM)
+
+	// if !certPool.AppendCertsFromPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cliCert})) {
+	// 	t.Fatal("failed to add client cert to CertPool")
+	// }
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("INSIDE SERVER!\n")
+
+		fmt.Printf("request TLS.CipherSuite: %v\n", r.TLS.CipherSuite)
+		fmt.Printf("request TLS.DidResume: %v\n", r.TLS.DidResume)
+		fmt.Printf("request TLS.CipherSuite: %v\n", r.TLS.VerifiedChains)
+		fmt.Printf("request header: %v\n", r.Header)
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodyString := string(body)
+		fmt.Printf("requestbody: %s\n", bodyString)
+		fmt.Fprintln(w, "ok")
+	}))
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{servTLSCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		// ClientAuth: tls.RequireAnyClientCert,
+		// ClientAuth: tls.RequestClientCert,
+		// ClientAuth: tls.NoClientCert,
+		ClientCAs: certPool,
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	authedClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				// InsecureSkipVerify: true,
+				RootCAs:      certPool,
+				Certificates: []tls.Certificate{clientTLSCert},
+			},
+		},
+	}
+
+	_, err = authedClient.Get(server.URL)
+
+	if err != nil {
+		fmt.Printf("AuthedClient Error: %s\n", err)
+	} else {
+		fmt.Printf("AuthedClient SUCCESS!\n")
+	}
+
+	// a, err := newAuthenticator(newCache(), &api.ExecConfig{
+	// 	Command:    "./testdata/test-plugin.sh",
+	// 	APIVersion: "client.authentication.k8s.io/v1alpha1",
+	// })
+	var clusterAddress string
+	var persister restclient.AuthProviderConfigPersister
+	cfg := map[string]string{
+		"pathExec":  "/path/to/externalSigner",
+		"pathLib":   "/path/to/library.so",
+		"slot-id":   "0",
+		"object-id": "2",
+	}
+
+	responseGetCertificate := "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(cliCert) + "\"}"
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcessSignatureVerificationGetCertificate", responseGetCertificate, "--", command}
+		// cs := []string{"-test.run=TestHelperProcessSignatureVerification", test.responseGetCertificate, test.responseSign, "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		return cmd
+	}
+
+	provider, err := newExternalSignerAuthProvider(clusterAddress, cfg, persister)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a *Authenticator
+	a = provider.(*Authenticator)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	// var output *clientauthentication.ExecCredential
+	// a.environ = func() []string {
+	// 	data, err := runtime.Encode(codecs.LegacyCodec(a.group), output)
+	// 	if err != nil {
+	// 		t.Fatal(err)
+	// 	}
+	// 	return []string{"TEST_OUTPUT=" + string(data)}
+	// }
+	// a.now = func() time.Time { return now }
+	// a.stderr = ioutil.Discard
+
+	fmt.Printf("caCertPEM: \n%s\n", string(caCertPEM))
+	fmt.Printf("cliCertPEM: \n%s\n", string(cliCertPEM))
+
+	// We're not interested in server's cert, this test is about client cert.
+	// tc := &transport.Config{}
+	tc := &transport.Config{TLS: transport.TLSConfig{Insecure: true}}
+
+	// tc := &transport.Config{TLS: transport.TLSConfig{CAData: caCertPEM}}
+	// tc := &transport.Config{TLS: transport.TLSConfig{}}
+
+	// tc := &transport.Config{TLS: transport.TLSConfig{CertData: cliCertPEM, Insecure: true}}
+
+	// tc := &transport.Config{TLS: transport.TLSConfig{CertData: cliCertPEM, CAData: caCertPEM}}
+
+	if err := a.UpdateTransportConfig(tc); err != nil {
+		t.Fatal(err)
+	}
+
+	// certDataJSON, err := json.Marshal(clientTLSCert)
+	// if err != nil {
+	// 	fmt.Printf("Error: %s\n", err)
+	// }
+	// fmt.Printf("clientTLSCert: %s\n", string(certDataJSON))
+
+	get := func(t *testing.T, desc string, wantErr bool) {
+		t.Run(desc, func(t *testing.T) {
+			// tlsCfg, err := transport.TLSConfigFor(tc)
+			if err != nil {
+				t.Fatal("TLSConfigFor:", err)
+			}
+			client := http.Client{
+				// Transport: &http.Transport{TLSClientConfig: tlsCfg},
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{
+						// InsecureSkipVerify: true,
+						RootCAs: certPool,
+
+						Certificates: []tls.Certificate{clientTLSCert},
+					},
+				},
+			}
+
+			// tlsCertsClient, err := json.Marshal(client.Transport)
+			// if err != nil {
+			// 	fmt.Printf("Error: %s\n", err)
+			// }
+			// fmt.Printf("client: %s\n", string(tlsCertsClient))
+
+			fmt.Printf("server.URL: %s\n", server.URL)
+			// fmt.Printf("server.URL: %s\n", client.)
+
+			resp, err := client.Get(server.URL)
+
+			body, err := ioutil.ReadAll(resp.Body)
+			bodyString := string(body)
+			fmt.Printf("response body: %s\n", bodyString)
+
+			// resp, err := client.Get("localhost:8443")
+			switch {
+			case err != nil && !wantErr:
+				t.Errorf("got client.Get error: %q, want nil", err)
+			case err == nil && wantErr:
+				t.Error("got nil client.Get error, want non-nil")
+			}
+			if err == nil {
+				resp.Body.Close()
+			}
+		})
+	}
+
+	// keyRaw := x509.MarshalPKCS1PrivateKey(privKey)
+	// keyPem := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyRaw})
+
+	// output = &clientauthentication.ExecCredential{
+	// 	Status: &clientauthentication.ExecCredentialStatus{
+	// 		ClientCertificateData: string(certBytes),
+	// 		ClientKeyData:         string(keyPem),
+	// 		ExpirationTimestamp:   &v1.Time{now.Add(time.Hour)},
+	// 	},
+	// }
+	get(t, "valid TLS cert", false)
+
+	// Advance time to force re-exec.
+	// nCert, nKey := genClientCert(t)
+	// now = now.Add(time.Hour * 2)
+	// output = &clientauthentication.ExecCredential{
+	// 	Status: &clientauthentication.ExecCredentialStatus{
+	// 		ClientCertificateData: string(nCert),
+	// 		ClientKeyData:         string(nKey),
+	// 		ExpirationTimestamp:   &v1.Time{now.Add(time.Hour)},
+	// 	},
+	// }
+	// get(t, "untrusted TLS cert", true)
+
+	// now = now.Add(time.Hour * 2)
+	// output = &clientauthentication.ExecCredential{
+	// 	Status: &clientauthentication.ExecCredentialStatus{
+	// 		ClientCertificateData: string(cert),
+	// 		ClientKeyData:         string(key),
+	// 		ExpirationTimestamp:   &v1.Time{now.Add(time.Hour)},
+	// 	},
+	// }
+	// get(t, "valid TLS cert again", false)
+}
+
+func TestHelperProcessSignatureVerificationSignWithDigest(t *testing.T) {
+	// fmt.Fprintf(os.Stderr, "HELPER: TestHelperProcessSignatureVerificationSignWithDigest, args: %d\n", len(os.Args))
+	if len(os.Args) < 5 {
+		t.Skip()
+	}
+
+	key, err := b64.StdEncoding.DecodeString(os.Args[2])
+	if err != nil {
+		t.Fatalf("Key decode error: %s\n", err)
+		return
+	}
+
+	privKey, err := x509.ParsePKCS1PrivateKey(key)
+	if err != nil {
+		t.Fatalf("Key parsing error: %s\n", err)
+		return
+	}
+
+	signRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
+	// fmt.Fprintf(os.Stderr, "Args: %s\n", signRequest)
+
+	type SignMessage struct {
+		APIVersion     string            `json:"apiVersion"`
+		Kind           string            `json:"kind"`
+		Configuration  map[string]string `json:"configuration"`
+		Digest         string            `json:"digest"`
+		SignerOptsType string            `json:"signerOptsType"`
+		SignerOpts     string            `json:"signerOpts"`
+	}
+
+	var signMessage SignMessage
+
+	err = json.Unmarshal([]byte(signRequest), &signMessage)
+	if err != nil {
+		t.Fatalf("Unmarshal error: %s\n", err)
+		return
+	}
+
+	// fmt.Fprintf(os.Stderr, "signMessage.Digest: %s\n", signMessage.Digest)
+	digest, err := b64.StdEncoding.DecodeString(signMessage.Digest)
+
+	if signMessage.Configuration["pathLib"] == "" {
+		t.Fatal(err)
+		return
+	}
+
+	signerOptsString := "{\"SaltLength\":-1,\"Hash\":5}"
+	var pSSOptions rsa.PSSOptions
+	err = json.Unmarshal([]byte(signerOptsString), &pSSOptions)
+	if err != nil {
+		t.Fatalf("Unmarshal error: %s\n", err)
+		return
+	}
+
+	newhash := crypto.SHA256
+
+	opts := rsa.PSSOptions{
+		SaltLength: -1,
+		Hash:       crypto.SHA256.HashFunc(),
+	}
+
+	signature, err := rsa.SignPSS(rand.Reader, privKey, newhash, digest, &opts)
+
+	response := "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"" + b64.StdEncoding.EncodeToString(signature) + "\"}"
+
+	fmt.Fprintf(os.Stdout, response)
+	os.Exit(0)
+}
+
+func TestTLSCredentialsSelfSigned(t *testing.T) {
+	certPool := x509.NewCertPool()
+	certRaw, privKey, cert := genClientCert(t)
+	_, nKey, _ := genClientCert(t)
+	// nCertRaw, nKey, nCert := genClientCert(t)
+
+	if !certPool.AppendCertsFromPEM(cert) {
+		t.Fatal("failed to add client cert to CertPool")
+	}
+	// if !certPool.AppendCertsFromPEM(nCert) {
+	// 	t.Fatal("failed to add client nCert to CertPool")
+	// }
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// fmt.Printf("INSIDE SERVER!\n")
+
+		// fmt.Printf("request TLS.CipherSuite: %v\n", r.TLS.CipherSuite)
+		// fmt.Printf("request TLS.DidResume: %v\n", r.TLS.DidResume)
+		// fmt.Printf("request TLS.CipherSuite: %v\n", r.TLS.VerifiedChains)
+		// fmt.Printf("request header: %v\n", r.Header)
+		// body, err := ioutil.ReadAll(r.Body)
+		// if err != nil {
+		// 	t.Fatal(err)
+		// }
+		// bodyString := string(body)
+		// fmt.Printf("requestbody: %s\n", bodyString)
+		fmt.Fprintln(w, "ok")
+	}))
+	server.TLS = &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  certPool,
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	var clusterAddress string
+	var persister restclient.AuthProviderConfigPersister
+	cfg := map[string]string{
+		"pathExec":  "/path/to/externalSigner",
+		"pathLib":   "/path/to/library.so",
+		"slot-id":   "0",
+		"object-id": "2",
+	}
+
+	responseGetCertificate := "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(certRaw) + "\"}"
+
+	// fmt.Printf("responseGetCertificate: %s\n", responseGetCertificate)
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcessSignatureVerificationGetCertificate", responseGetCertificate, "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		return cmd
+	}
+
+	provider, err := newExternalSignerAuthProvider(clusterAddress, cfg, persister)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a *Authenticator
+	a = provider.(*Authenticator)
+
+	tc := &transport.Config{TLS: transport.TLSConfig{Insecure: true}}
+	if err := a.UpdateTransportConfig(tc); err != nil {
+		t.Fatal(err)
+	}
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		csSign := []string{"-test.run=TestHelperProcessSignatureVerificationSignWithDigest", b64.StdEncoding.EncodeToString(privKey), "--", command}
+		csSign = append(csSign, args...)
+		cmdSign := exec.Command(os.Args[0], csSign...)
+		return cmdSign
+	}
+
+	get := func(t *testing.T, desc string, wantErr bool) {
+		t.Run(desc, func(t *testing.T) {
+			tlsCfg, err := transport.TLSConfigFor(tc)
+			if err != nil {
+				t.Fatal("TLSConfigFor:", err)
+			}
+			client := http.Client{
+				Transport: &http.Transport{TLSClientConfig: tlsCfg},
+			}
+
+			resp, err := client.Get(server.URL)
+
+			switch {
+			case err != nil && !wantErr:
+				t.Errorf("got client.Get error: %q, want nil", err)
+			case err == nil && wantErr:
+				t.Error("got nil client.Get error, want non-nil")
+			}
+			if err == nil {
+				resp.Body.Close()
+			}
+
+		})
+	}
+
+	get(t, "valid TLS cert", false)
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		csSign := []string{"-test.run=TestHelperProcessSignatureVerificationSignWithDigest", b64.StdEncoding.EncodeToString(nKey), "--", command}
+		csSign = append(csSign, args...)
+		cmdSign := exec.Command(os.Args[0], csSign...)
+		return cmdSign
+	}
+
+	get(t, "untrusted TLS cert", true)
+
+	// nResponseGetCertificate := "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(nCertRaw) + "\"}"
+
+	// execCommand = func(command string, args ...string) *exec.Cmd {
+	// 	cs := []string{"-test.run=TestHelperProcessSignatureVerificationGetCertificate", nResponseGetCertificate, "--", command}
+	// 	cs = append(cs, args...)
+	// 	cmd := exec.Command(os.Args[0], cs...)
+	// 	return cmd
+	// }
+
+	// nprovider, err := newExternalSignerAuthProvider(clusterAddress, cfg, persister)
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// var na *Authenticator
+	// na = nprovider.(*Authenticator)
+
+	// ntc := &transport.Config{TLS: transport.TLSConfig{Insecure: true}}
+	// if err := na.UpdateTransportConfig(ntc); err != nil {
+	// 	t.Fatal(err)
+	// }
+
+	// nGet := func(t *testing.T, desc string, wantErr bool) {
+	// 	t.Run(desc, func(t *testing.T) {
+	// 		tlsCfg, err := transport.TLSConfigFor(ntc)
+	// 		if err != nil {
+	// 			t.Fatal("TLSConfigFor:", err)
+	// 		}
+	// 		client := http.Client{
+	// 			Transport: &http.Transport{TLSClientConfig: tlsCfg},
+	// 		}
+
+	// 		resp, err := client.Get(server.URL)
+
+	// 		switch {
+	// 		case err != nil && !wantErr:
+	// 			t.Errorf("got client.Get error: %q, want nil", err)
+	// 		case err == nil && wantErr:
+	// 			t.Error("got nil client.Get error, want non-nil")
+	// 		}
+	// 		if err == nil {
+	// 			resp.Body.Close()
+	// 		}
+
+	// 	})
+	// }
+
+	// nGet(t, "invalid signature", false)
+}
+
+// genClientCert generates an x509 certificate for testing. Certificate and key
+// are returned in PEM encoding. The generated cert expires in 24 hours.
+func genClientCert(t *testing.T) ([]byte, []byte, []byte) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	// key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyRaw := x509.MarshalPKCS1PrivateKey(key)
+	// keyRaw, err := x509.MarshalECPrivateKey(key)
+	// if err != nil {
+	// t.Fatal(err)
+	// }
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject:      pkix.Name{Organization: []string{"Acme Co"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	certRaw, err := x509.CreateCertificate(rand.Reader, cert, cert, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fmt.Printf("cert: %v\n", cert)
+
+	return certRaw,
+		keyRaw,
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certRaw})
 }

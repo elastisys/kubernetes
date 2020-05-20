@@ -25,11 +25,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os/exec"
 
 	// "io/ioutil"
 	"net/http"
 	"os"
-	"os/exec"
 	"reflect"
 	"sync"
 
@@ -103,10 +103,11 @@ func (c *clientCache) setClient(cfg map[string]string, client *Authenticator) *A
 type externalSigner struct {
 	publicKey crypto.PublicKey
 	cfg       map[string]string
+	// execCommand func(command string, args ...string) *exec.Cmd
 }
 
 func (priv *externalSigner) Public() crypto.PublicKey {
-	fmt.Printf("[PUBLIC]\n")
+	// fmt.Printf("[PUBLIC]\n")
 	return priv.publicKey
 }
 
@@ -147,7 +148,7 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 		return nil, fmt.Errorf("marshal error: %v", err)
 	}
 
-	fmt.Printf("Sing request : %s\n", string(b))
+	// fmt.Printf("Sign request: %s\n", string(b))
 
 	os.Setenv("EXTERNAL_SIGNER_PLUGIN_CONFIG", string(b))
 	cmd := execCommand(priv.cfg[cfgPathExec])
@@ -177,7 +178,7 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 	if err != nil {
 		return nil, fmt.Errorf("execution error: %v", err)
 	}
-	fmt.Printf("Sign response: %s\n", string(out))
+	// fmt.Printf("Sign response: %s\n", string(out))
 
 	type Message struct {
 		APIVersion string `json:"apiVersion"`
@@ -187,7 +188,7 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 
 	var record Message
 
-	err = json.Unmarshal([]byte(out), &record)
+	err = json.Unmarshal(out, &record)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal error: %v", err)
 	}
@@ -225,7 +226,7 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 	if err != nil {
 		return nil, fmt.Errorf("marshal error: %v", err)
 	}
-	fmt.Printf("Certificate request: %s\n", string(b))
+	// fmt.Printf("Certificate request: %s\n", string(b))
 
 	os.Setenv("EXTERNAL_SIGNER_PLUGIN_CONFIG", string(b))
 	cmd := execCommand(cfg[cfgPathExec])
@@ -256,7 +257,7 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 	if err != nil {
 		return nil, fmt.Errorf("execution error: %v", err)
 	}
-	fmt.Printf("Certificate response: %s\n", string(out))
+	// fmt.Printf("Certificate response: %s\n", string(out))
 
 	type Message struct {
 		APIVersion  string `json:"apiVersion"`
@@ -267,7 +268,7 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 
 	var record Message
 
-	err = json.Unmarshal([]byte(out), &record)
+	err = json.Unmarshal(out, &record)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal error: %v", err)
 	}
@@ -277,10 +278,11 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 		return nil, fmt.Errorf("decode error: %v", err)
 	}
 
-	cert, err := x509.ParseCertificate([]byte(certExt))
+	cert, err := x509.ParseCertificate(certExt)
 	if err != nil {
 		return nil, fmt.Errorf("parse certificate error: %v", err)
 	}
+
 	tlsCert := &tls.Certificate{
 		Certificate: [][]byte{certExt},
 		PrivateKey:  &externalSigner{cert.PublicKey, cfg},
@@ -299,14 +301,17 @@ type Authenticator struct {
 }
 
 func (p *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.Response, bool, error) {
+	fmt.Printf("[AuthenticateRequest]\n")
 	return nil, true, nil
 }
 
 func (p *Authenticator) Login() error {
+	fmt.Printf("[Login]\n")
 	return fmt.Errorf("not yet implemented")
 }
 
 func (p *Authenticator) WrapTransport(rt http.RoundTripper) http.RoundTripper {
+	fmt.Printf("[WrapTransport]\n")
 	// rtJSON, err := json.Marshal(rt)
 	// if err != nil {
 	// 	fmt.Printf("[WrapTransport] Error: %s\n", err)
@@ -316,22 +321,27 @@ func (p *Authenticator) WrapTransport(rt http.RoundTripper) http.RoundTripper {
 }
 
 func (p *Authenticator) UpdateTransportConfig(conf *transport.Config) error {
+	fmt.Printf("[UpdateTransportConfig]\n")
 	conf.TLS.GetCert = func() (*tls.Certificate, error) { return p.tlsCert, nil }
+	// conf.TLS.CAFile = ""
+	// conf.TLS.Insecure = true
 
-	// confJSON, err := json.Marshal(conf)
-	// if err != nil {
-	// 	fmt.Printf("Error: %s\n", err)
-	// }
-	// fmt.Printf("[UpdateTransportConfig] confJSON: %s\n", string(confJSON))
+	// fmt.Printf("CAData:\n%s\n", string(conf.TLS.CAData))
+	// fmt.Printf("CAFile: %s\n", string(conf.TLS.CAFile))
+	// fmt.Printf("CertData:\n%s\n", string(conf.TLS.CertData))
+	// fmt.Printf("CertFile:\n%s\n", string(conf.TLS.CertFile))
+	// fmt.Printf("Insecure: %v\n", conf.TLS.Insecure)
+	// fmt.Printf("KeyData:\n%s\n", string(conf.TLS.KeyData))
+	// fmt.Printf("KeyFile: %s\n", string(conf.TLS.KeyFile))
+	// fmt.Printf("NextProtos: %v\n", conf.TLS.NextProtos)
+	// fmt.Printf("ReloadTLSFiles: %v\n", conf.TLS.ReloadTLSFiles)
+	// fmt.Printf("ServerName: %s\n", string(conf.TLS.ServerName))
 
-	// tlsConfig, err := transport.TLSConfigFor(conf)
-	// if err != nil {
-	// 	fmt.Printf("Error: %s\n", err)
-	// }
-	// tlsConfigJSON, err := json.Marshal(tlsConfig)
-	// if err != nil {
-	// 	fmt.Printf("Error: %s\n", err)
-	// }
-	// fmt.Printf("[UpdateTransportConfig] tlsConfigJSON: %s\n", string(tlsConfigJSON))
+	// cliCert, _ := conf.TLS.GetCert()
+	// cliCertPEM := pem.EncodeToMemory(&pem.Block{
+	// 	Type: "CERTIFICATE", Bytes: cliCert.Certificate[0],
+	// })
+	// fmt.Printf("GetCert:\n%s\n", cliCertPEM)
+
 	return nil
 }
