@@ -18,39 +18,36 @@ package externalsigner
 
 import (
 	// "bytes"
+	"context"
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
-	b64 "encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os/exec"
+	"log"
+	"net"
+	"time"
 
-	// "io/ioutil"
 	"net/http"
-	"os"
-	"reflect"
 	"sync"
 
-	// "crypto/rsa"
-	// "go/types"
-
-	// "runtime/debug"
+	"crypto/rsa"
 
 	"k8s.io/apiserver/pkg/authentication/authenticator"
+	pb "k8s.io/client-go/plugin/pkg/client/auth/externalsigner/v1alpha1"
+
+	"google.golang.org/grpc"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/transport"
 	"k8s.io/klog"
 )
 
 const (
-	cfgPathExec = "pathExec"
+	cfgPathSocket = "pathSocket"
 )
 
 var cache = newClientCache()
-
-var execCommand = exec.Command
 
 func init() {
 	if err := restclient.RegisterAuthProviderPlugin("externalSigner", newExternalSignerAuthProvider); err != nil {
@@ -101,192 +98,146 @@ func (c *clientCache) setClient(cfg map[string]string, client *Authenticator) *A
 }
 
 type externalSigner struct {
-	publicKey crypto.PublicKey
-	cfg       map[string]string
-	// execCommand func(command string, args ...string) *exec.Cmd
+	publicKey   crypto.PublicKey
+	cfg         map[string]string
+	clusterName string
+	socketPath  string
 }
 
 func (priv *externalSigner) Public() crypto.PublicKey {
-	// fmt.Printf("[PUBLIC]\n")
 	return priv.publicKey
 }
 
 func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error) {
 	fmt.Printf("[SIGN]\n")
-	// fmt.Printf("digest: %s\n", b64.StdEncoding.EncodeToString(digest))
-	// fmt.Printf("options: %d\n", opts.HashFunc())
 
-	type ConfigMessage struct {
-		APIVersion     string            `json:"apiVersion"`
-		Kind           string            `json:"kind"`
-		Digest         string            `json:"digest"`
-		Configuration  map[string]string `json:"configuration"`
-		SignerOptsType string            `json:"signerOptsType"`
-		SignerOpts     string            `json:"signerOpts"`
-		// SignerOpts     map[string]string `json:"signerOpts"`
-	}
+	fmt.Printf("priv.socketPath: %s\n", priv.socketPath)
 
-	// fmt.Printf("TypeOf(crypto.SignerOpts): %s\n", reflect.TypeOf(opts))
-
-	signerOptsString, err := json.Marshal(opts)
+	conn, err := grpc.Dial(
+		priv.socketPath,
+		grpc.WithInsecure(),
+		grpc.WithDialer(func(addr string, timeout time.Duration) (net.Conn, error) {
+			return net.DialTimeout("unix", addr, timeout)
+		}))
 	if err != nil {
-		return nil, fmt.Errorf("opts marshal error: %v", err)
+		log.Printf("did not connect: %v", err)
+		return nil, err
 	}
+	defer conn.Close()
+	c := pb.NewExternalSignerServiceClient(conn)
 
-	config := ConfigMessage{
-		APIVersion:    "external-signer.authentication.k8s.io/v1alpha1",
-		Kind:          "Sign",
-		Digest:        b64.StdEncoding.EncodeToString(digest),
+	pSSOptions := opts.(*rsa.PSSOptions)
+
+	sctx, scancel := context.WithTimeout(context.Background(), time.Minute)
+	defer scancel()
+	stream, err := c.Sign(sctx, &pb.SignatureRequest{
+		Version:       "v1alpha1",
+		ClusterName:   priv.clusterName,
 		Configuration: priv.cfg,
-		// SignerOptsType: "rsa.PSSOptions",
-		SignerOptsType: reflect.TypeOf(opts).String(),
-		SignerOpts:     string(signerOptsString),
-	}
-
-	b, err := json.Marshal(config)
+		Digest:        digest,
+		SignerType:    pb.SignatureRequest_RSAPSS,
+		SignerOptsRSAPSS: &pb.SignatureRequest_RSAPSSOptions{
+			SaltLenght: int32(pSSOptions.SaltLength),
+			Hash:       uint32(opts.HashFunc()),
+		},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal error: %v", err)
+		log.Printf("could not sign: %v", err)
+		return nil, err
 	}
 
-	// fmt.Printf("Sign request: %s\n", string(b))
+	for {
+		sr, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("received error from external plugin: %v", err)
+		}
 
-	os.Setenv("EXTERNAL_SIGNER_PLUGIN_CONFIG", string(b))
-	cmd := execCommand(priv.cfg[cfgPathExec])
-
-	// cmd := exec.Command(priv.cfg[cfgPathExec], string(b))
-	// cmd := execCommand(priv.cfg[cfgPathExec], string(b))
-
-	// cmd := exec.Command(priv.cfg[cfgPathExec])
-	// buffer := bytes.Buffer{}
-	// buffer.Write(b)
-	// buffer.Write(b)
-	// buffer.WriteString("\n")
-	// cmd.Stdin = &buffer
-	// cmd.Stdin = bytes.NewBuffer(b)
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
-
-	// grepIn, _ := cmd.StdinPipe()
-	// grepOut, _ := cmd.StdoutPipe()
-	// cmd.Start()
-	// grepIn.Write(b)
-	// // grepIn.Close()
-	// out, err := ioutil.ReadAll(grepOut)
-	// cmd.Wait()
-
-	if err != nil {
-		return nil, fmt.Errorf("execution error: %v", err)
-	}
-	// fmt.Printf("Sign response: %s\n", string(out))
-
-	type Message struct {
-		APIVersion string `json:"apiVersion"`
-		Kind       string `json:"kind"`
-		Signature  string `json:"signature"`
+		switch x := sr.Content.(type) {
+		case *pb.SignatureResponse_Signature:
+			signature = x.Signature
+		case *pb.SignatureResponse_UserPrompt:
+			fmt.Printf("%s\n", x.UserPrompt)
+		case nil:
+			// The field is not set.
+		default:
+			return nil, fmt.Errorf("Signature has unexpected type %T", x)
+		}
 	}
 
-	var record Message
-
-	err = json.Unmarshal(out, &record)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshal error: %v", err)
-	}
-	signature, err = b64.StdEncoding.DecodeString(record.Signature)
-	return
+	return signature, err
 }
 
 func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string, persister restclient.AuthProviderConfigPersister) (restclient.AuthProvider, error) {
-	// func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string, persister restclient.AuthProviderConfigPersister) (Authenticator, error) {
 	fmt.Printf("[NEW AUTH PROVIDER]\n")
-	// debug.PrintStack()
-
-	type ConfigMessage struct {
-		APIVersion    string            `json:"apiVersion"`
-		Kind          string            `json:"kind"`
-		Configuration map[string]string `json:"configuration"`
-	}
-
-	path := cfg[cfgPathExec]
-	if path == "" {
-		return nil, fmt.Errorf("Must provide %s", cfgPathExec)
-	}
 
 	if provider, ok := cache.getClient(cfg); ok {
+		fmt.Printf("Use cached\n")
 		return provider, nil
 	}
+	fmt.Printf("Create new\n")
 
-	config := ConfigMessage{
-		APIVersion:    "external-signer.authentication.k8s.io/v1alpha1",
-		Kind:          "Certificate",
+	path := cfg[cfgPathSocket]
+	if path == "" {
+		return nil, fmt.Errorf("Must provide %s", cfgPathSocket)
+	}
+
+	conn, err := grpc.Dial(
+		path,
+		grpc.WithInsecure(),
+		grpc.WithDialer(func(addr string, timeout time.Duration) (net.Conn, error) {
+			return net.DialTimeout("unix", addr, timeout)
+		}))
+	if err != nil {
+		log.Fatalf("did not connect: %v", err)
+	}
+	defer conn.Close()
+	c := pb.NewExternalSignerServiceClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	stream, err := c.GetCertificate(ctx, &pb.CertificateRequest{
+		Version:       "v1alpha1",
+		ClusterName:   clusterAddress,
 		Configuration: cfg,
-	}
-
-	b, err := json.Marshal(config)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal error: %v", err)
-	}
-	// fmt.Printf("Certificate request: %s\n", string(b))
-
-	os.Setenv("EXTERNAL_SIGNER_PLUGIN_CONFIG", string(b))
-	cmd := execCommand(cfg[cfgPathExec])
-
-	// cmd := exec.Command(cfg[cfgPathExec], string(b))
-	// cmd := execCommand(cfg[cfgPathExec], string(b))
-	// cmd := exec.Command(cfg[cfgPathExec])
-	// buffer := bytes.Buffer{}
-	// buffer.Write(b)
-	// buffer.WriteString("\n")
-	// cmd.Stdin = &buffer
-
-	// cmd.Stdin = bytes.NewBuffer(b)
-
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	out, err := cmd.Output()
-
-	// grepIn, _ := cmd.StdinPipe()
-	// grepOut, _ := cmd.StdoutPipe()
-	// cmd.Start()
-	// grepIn.Write(b)
-	// grepIn.Close()
-	// out, err := ioutil.ReadAll(grepOut)
-	// cmd.Wait()
-
-	// fmt.Printf("External certificate output: %s\n", out)
-	if err != nil {
-		return nil, fmt.Errorf("execution error: %v", err)
-	}
-	// fmt.Printf("Certificate response: %s\n", string(out))
-
-	type Message struct {
-		APIVersion  string `json:"apiVersion"`
-		Kind        string `json:"kind"`
-		Certificate string `json:"certificate"`
-		// PublicKey   string `json:"publicKey"`
+		return nil, fmt.Errorf("could not get certificate: %v", err)
 	}
 
-	var record Message
+	var certRaw []byte
 
-	err = json.Unmarshal(out, &record)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshal error: %v", err)
+	for {
+		cr, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("received error from external plugin: %v", err)
+		}
+
+		switch x := cr.Content.(type) {
+		case *pb.CertificateResponse_Certificate:
+			certRaw = x.Certificate
+		case *pb.CertificateResponse_UserPrompt:
+			fmt.Printf("%s\n", x.UserPrompt)
+		case nil:
+			// The field is not set.
+		default:
+			return nil, fmt.Errorf("Signature has unexpected type %T", x)
+		}
 	}
 
-	certExt, err := b64.StdEncoding.DecodeString(record.Certificate)
-	if err != nil {
-		return nil, fmt.Errorf("decode error: %v", err)
-	}
-
-	cert, err := x509.ParseCertificate(certExt)
+	cert, err := x509.ParseCertificate(certRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parse certificate error: %v", err)
 	}
 
 	tlsCert := &tls.Certificate{
-		Certificate: [][]byte{certExt},
-		PrivateKey:  &externalSigner{cert.PublicKey, cfg},
-		// PrivateKey: &externalSigner{cert.PublicKey, cfg, protocol},
+		Certificate: [][]byte{certRaw},
+		PrivateKey:  &externalSigner{cert.PublicKey, cfg, clusterAddress, path},
 	}
 
 	provider := &Authenticator{
@@ -301,47 +252,19 @@ type Authenticator struct {
 }
 
 func (p *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.Response, bool, error) {
-	fmt.Printf("[AuthenticateRequest]\n")
 	return nil, true, nil
 }
 
 func (p *Authenticator) Login() error {
-	fmt.Printf("[Login]\n")
 	return fmt.Errorf("not yet implemented")
 }
 
 func (p *Authenticator) WrapTransport(rt http.RoundTripper) http.RoundTripper {
-	fmt.Printf("[WrapTransport]\n")
-	// rtJSON, err := json.Marshal(rt)
-	// if err != nil {
-	// 	fmt.Printf("[WrapTransport] Error: %s\n", err)
-	// }
-	// fmt.Printf("[WrapTransport] rtJSON: %s\n", string(rtJSON))
 	return rt
 }
 
 func (p *Authenticator) UpdateTransportConfig(conf *transport.Config) error {
-	fmt.Printf("[UpdateTransportConfig]\n")
 	conf.TLS.GetCert = func() (*tls.Certificate, error) { return p.tlsCert, nil }
-	// conf.TLS.CAFile = ""
-	// conf.TLS.Insecure = true
-
-	// fmt.Printf("CAData:\n%s\n", string(conf.TLS.CAData))
-	// fmt.Printf("CAFile: %s\n", string(conf.TLS.CAFile))
-	// fmt.Printf("CertData:\n%s\n", string(conf.TLS.CertData))
-	// fmt.Printf("CertFile:\n%s\n", string(conf.TLS.CertFile))
-	// fmt.Printf("Insecure: %v\n", conf.TLS.Insecure)
-	// fmt.Printf("KeyData:\n%s\n", string(conf.TLS.KeyData))
-	// fmt.Printf("KeyFile: %s\n", string(conf.TLS.KeyFile))
-	// fmt.Printf("NextProtos: %v\n", conf.TLS.NextProtos)
-	// fmt.Printf("ReloadTLSFiles: %v\n", conf.TLS.ReloadTLSFiles)
-	// fmt.Printf("ServerName: %s\n", string(conf.TLS.ServerName))
-
-	// cliCert, _ := conf.TLS.GetCert()
-	// cliCertPEM := pem.EncodeToMemory(&pem.Block{
-	// 	Type: "CERTIFICATE", Bytes: cliCert.Certificate[0],
-	// })
-	// fmt.Printf("GetCert:\n%s\n", cliCertPEM)
 
 	return nil
 }
