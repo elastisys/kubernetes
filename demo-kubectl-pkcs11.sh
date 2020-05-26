@@ -52,7 +52,7 @@ pe "wipe -f ~/.minikube/client.*"
 pe "kubectl get pods -n kube-system"
 
 pe "kubectl config unset users.minikube"
-pe "kubectl config set-credentials minikube --auth-provider=pkcs11 --auth-provider-arg=path=/usr/local/lib/libykcs11.so,pin=123456,slot-id=0,object-id=2"
+pe "kubectl config set-credentials minikube --auth-provider=externalSigner --auth-provider-arg=pathSocket=$XDG_RUNTIME_DIR/externalsigner.sock,pathLib=/usr/local/lib/libykcs11.so,slotId=0,objectId=2"
 pe "cat ~/.kube/config"
 pe "kubectl get pods -n kube-system"
 
