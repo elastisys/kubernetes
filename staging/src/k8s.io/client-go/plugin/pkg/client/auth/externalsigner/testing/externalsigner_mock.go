@@ -2,6 +2,10 @@ package testing
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"os"
@@ -12,7 +16,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	kmsapi "k8s.io/client-go/plugin/pkg/client/auth/externalsigner/v1alpha1"
+	"k8s.io/client-go/plugin/pkg/client/auth/externalsigner/v1alpha1"
 	"k8s.io/klog"
 )
 
@@ -34,12 +38,13 @@ type ExternalSignerPlugin struct {
 	inFailedState       bool
 	ver                 string
 	socketPath          string
-	certificateResponse kmsapi.CertificateResponse
-	signatureResponse   kmsapi.SignatureResponse
+	certificateResponse v1alpha1.CertificateResponse
+	signatureResponse   v1alpha1.SignatureResponse
+	privKeyRaw          []byte
 }
 
 // NewExternalSignerPlugin is a constructor for ExternalSignerPlugin.
-func NewExternalSignerPlugin(socketPath string, certificateResponse kmsapi.CertificateResponse, signatureResponse kmsapi.SignatureResponse) (*ExternalSignerPlugin, error) {
+func NewExternalSignerPlugin(socketPath string, certificateResponse v1alpha1.CertificateResponse, signatureResponse v1alpha1.SignatureResponse, privKey []byte) (*ExternalSignerPlugin, error) {
 	server := grpc.NewServer()
 	result := &ExternalSignerPlugin{
 		grpcServer:          server,
@@ -48,42 +53,79 @@ func NewExternalSignerPlugin(socketPath string, certificateResponse kmsapi.Certi
 		socketPath:          socketPath,
 		certificateResponse: certificateResponse,
 		signatureResponse:   signatureResponse,
+		privKeyRaw:          privKey,
 	}
 
-	kmsapi.RegisterExternalSignerServiceServer(server, result)
+	v1alpha1.RegisterExternalSignerServiceServer(server, result)
 	return result, nil
 }
 
-func (p *ExternalSignerPlugin) Version(ctx context.Context, in *kmsapi.VersionRequest) (*kmsapi.VersionResponse, error) {
+func (p *ExternalSignerPlugin) Version(ctx context.Context, in *v1alpha1.VersionRequest) (*v1alpha1.VersionResponse, error) {
 	return nil, nil
 }
 
-func (p *ExternalSignerPlugin) GetCertificate(ctx context.Context, in *kmsapi.CertificateRequest) (*kmsapi.CertificateResponse, error) {
-	return &p.certificateResponse, nil
+func (p *ExternalSignerPlugin) GetCertificate(in *v1alpha1.CertificateRequest, stream v1alpha1.ExternalSignerService_GetCertificateServer) error {
+	stream.Send(&p.certificateResponse)
+	return nil
 }
 
-func (p *ExternalSignerPlugin) Sign(ctx context.Context, in *kmsapi.SignatureRequest) (*kmsapi.SignatureResponse, error) {
-
-	fmt.Printf("TEST 2\n")
-
+func (p *ExternalSignerPlugin) Sign(in *v1alpha1.SignatureRequest, stream v1alpha1.ExternalSignerService_SignServer) error {
 	configMap := in.GetConfiguration()
 
 	path := configMap["pathLib"]
 	if path == "" {
-		return nil, fmt.Errorf("must provide pathLib")
+		return fmt.Errorf("must provide pathLib")
 	}
 
 	_, err := strconv.Atoi(configMap["slotId"])
 	if err != nil {
-		return nil, fmt.Errorf("must provide integer SlotID: %v", err)
+		return fmt.Errorf("must provide integer SlotID: %v", err)
 	}
 
 	_, err = strconv.Atoi(configMap["objectId"])
 	if err != nil {
-		return nil, fmt.Errorf("must provide integer ObjectID: %v", err)
+		return fmt.Errorf("must provide integer ObjectID: %v", err)
 	}
 
-	return &p.signatureResponse, nil
+	if p.privKeyRaw == nil {
+		fmt.Printf("Key is nil, using prepared response.\n")
+		// if &p.signatureResponse != nil {
+		stream.Send(&p.signatureResponse)
+	} else {
+		fmt.Printf("Key is not nil, processing the response.\n")
+		privKey, err := x509.ParsePKCS1PrivateKey(p.privKeyRaw)
+		if err != nil {
+			return fmt.Errorf("Key parsing error: %s\n", err)
+		}
+		if privKey == nil {
+			return fmt.Errorf("private key not found\n")
+		}
+
+		digest := in.GetDigest()
+
+		var signature []byte
+
+		switch in.GetSignerType() {
+		case v1alpha1.SignatureRequest_RSAPSS:
+			pSSOptions := rsa.PSSOptions{
+				SaltLength: int(in.GetSignerOptsRSAPSS().GetSaltLenght()),
+				Hash:       crypto.Hash(in.GetSignerOptsRSAPSS().GetHash()),
+			}
+
+			newhash := crypto.SHA256
+
+			signature, err = rsa.SignPSS(rand.Reader, privKey, newhash, digest, &pSSOptions)
+
+			if err != nil {
+				return fmt.Errorf("sign error: %v", err)
+			}
+		default:
+			return fmt.Errorf("SignerOpts for %s are not implemented", in.GetSignerType())
+		}
+		stream.Send(&v1alpha1.SignatureResponse{Content: &v1alpha1.SignatureResponse_Signature{Signature: signature}})
+	}
+
+	return nil
 }
 
 // // WaitForExternalSignerPluginToBeUp waits until the plugin is ready to serve requests.

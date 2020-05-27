@@ -2,18 +2,28 @@ package externalsigner
 
 import (
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
 	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	b64 "encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 
 	mock "k8s.io/client-go/plugin/pkg/client/auth/externalsigner/testing"
 	pb "k8s.io/client-go/plugin/pkg/client/auth/externalsigner/v1alpha1"
 	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/transport"
 
 	"k8s.io/apimachinery/pkg/util/uuid"
 )
@@ -68,7 +78,6 @@ stR0Yiw0buV6DL/moUO0HIM9Bjh96HJp+LxiIS6UCdIhMPp5HoQa
 )
 
 func init() {
-	// fmt.Printf("\n!!!! INIT !!!!\n")
 	cert, err := tls.X509KeyPair(certData, keyData)
 	if err != nil {
 		panic(err)
@@ -95,10 +104,6 @@ func newEndpoint() *testSocket {
 		endpoint: fmt.Sprintf("unix:///%s", p),
 	}
 }
-
-// type server struct {
-// 	mock.UnimplementedExternalSignerServiceServer
-// }
 
 func TestClientCache(t *testing.T) {
 	cache := newClientCache()
@@ -205,7 +210,7 @@ func TestSign(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			signer := externalSigner{x509Cert.PublicKey, test.cfg, "socketPath"}
+			signer := externalSigner{x509Cert.PublicKey, test.cfg, "clusterName", "socketPath"}
 
 			var rand io.Reader
 			var digest []byte
@@ -220,7 +225,7 @@ func TestSign(t *testing.T) {
 
 			s := newEndpoint()
 			signatureByte, _ := b64.StdEncoding.DecodeString(test.signatureStr)
-			f, err := mock.NewExternalSignerPlugin(s.path, pb.CertificateResponse{}, pb.SignatureResponse{Signature: signatureByte})
+			f, err := mock.NewExternalSignerPlugin(s.path, pb.CertificateResponse{}, pb.SignatureResponse{Content: &pb.SignatureResponse_Signature{Signature: signatureByte}}, nil)
 			f.Start()
 			defer f.CleanUp()
 			signer.socketPath = s.path
@@ -248,21 +253,18 @@ func TestSign(t *testing.T) {
 
 func TestGetCertificate(t *testing.T) {
 	tests := []struct {
-		name string
-		cfg  map[string]string
-		// response string
+		name           string
+		cfg            map[string]string
 		certificateStr string
 		wantErr        bool
 	}{
 		{
 			name: "correct",
 			cfg: map[string]string{
-				"pathExec":  "/path/to/externalSigner",
 				"pathLib":   "/path/to/library.so",
 				"slot-id":   "0",
 				"object-id": "2",
 			},
-			// response: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"MIIDADCCAeigAwIBAgIBAjANBgkqhkiG9w0BAQsFADAVMRMwEQYDVQQDEwptaW5pa3ViZUNBMB4XDTIwMDQxMzEzMDQyNVoXDTIxMDQxNDEzMDQyNVowMTEXMBUGA1UEChMOc3lzdGVtOm1hc3RlcnMxFjAUBgNVBAMTDW1pbmlrdWJlLXVzZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDrMKV03/EKwgpOBIDvRFOxDEFBcCxuwrWva5GiZWh3UhLRTDZfeFgxeMYUo/bX0o1D/aDCgd0k1eTmA6ANchAldjjnxsvEiWZDWdu9tDQnmHP3dM4Zp14k7KrfNkG50eFXzIl9oIuAo5GDaeXydTufniLOaKor1uuk322Ms7rwci8DOz6LTXG6n6J8XL2U5b3gTFyBdkt08Uh0N/NhnuotOLyuAeGjJuTriHemyv0jT09twbEQtKhIvu4tyJ/C421PX+J3tgR63lkzQ3C98D5p1sYJseEQa8GXtQ9he08Uqh51roAvmoPhxguA7AuAgy/vAV1sfpCtei6Q68T4PrKDAgMBAAGjPzA9MA4GA1UdDwEB/wQEAwIFoDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQsFAAOCAQEAO9l9BxUB1UIACOvs23ONdsd71iKZczyC+D5fp4O159+azMfCisek2DaJHJpWPeZQEl/auGsMj15bEV+rECqtNpngHE2ywee3iJfWCnv41mGx+y5KcDDfl5C1lHxg+JYbIDc4KSSBdK6mdn0TvN6sl5bpT6wyxlxD2ln5z2B+NUkggSknljrm/nf7/nv5BWK+i4oG1XsuGhrGy8Yi4TFO5s2COh8ce3ToERv9BdxN/5N2UPNVOpM3dTPLgntzPIqgiLiGe0asENIrb8uwqVZdIGx2C3Blemv0kwwISWVLs+ouBJHS07uAlEfwDIaxn0z70We52oMM2vM0lR6orvgMvQ==\"}",
 			certificateStr: "MIIDADCCAeigAwIBAgIBAjANBgkqhkiG9w0BAQsFADAVMRMwEQYDVQQDEwptaW5pa3ViZUNBMB4XDTIwMDQxMzEzMDQyNVoXDTIxMDQxNDEzMDQyNVowMTEXMBUGA1UEChMOc3lzdGVtOm1hc3RlcnMxFjAUBgNVBAMTDW1pbmlrdWJlLXVzZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDrMKV03/EKwgpOBIDvRFOxDEFBcCxuwrWva5GiZWh3UhLRTDZfeFgxeMYUo/bX0o1D/aDCgd0k1eTmA6ANchAldjjnxsvEiWZDWdu9tDQnmHP3dM4Zp14k7KrfNkG50eFXzIl9oIuAo5GDaeXydTufniLOaKor1uuk322Ms7rwci8DOz6LTXG6n6J8XL2U5b3gTFyBdkt08Uh0N/NhnuotOLyuAeGjJuTriHemyv0jT09twbEQtKhIvu4tyJ/C421PX+J3tgR63lkzQ3C98D5p1sYJseEQa8GXtQ9he08Uqh51roAvmoPhxguA7AuAgy/vAV1sfpCtei6Q68T4PrKDAgMBAAGjPzA9MA4GA1UdDwEB/wQEAwIFoDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQsFAAOCAQEAO9l9BxUB1UIACOvs23ONdsd71iKZczyC+D5fp4O159+azMfCisek2DaJHJpWPeZQEl/auGsMj15bEV+rECqtNpngHE2ywee3iJfWCnv41mGx+y5KcDDfl5C1lHxg+JYbIDc4KSSBdK6mdn0TvN6sl5bpT6wyxlxD2ln5z2B+NUkggSknljrm/nf7/nv5BWK+i4oG1XsuGhrGy8Yi4TFO5s2COh8ce3ToERv9BdxN/5N2UPNVOpM3dTPLgntzPIqgiLiGe0asENIrb8uwqVZdIGx2C3Blemv0kwwISWVLs+ouBJHS07uAlEfwDIaxn0z70We52oMM2vM0lR6orvgMvQ==",
 		},
 		{
@@ -272,7 +274,6 @@ func TestGetCertificate(t *testing.T) {
 				"slot-id":   "0",
 				"object-id": "2",
 			},
-			// response: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"MIIDADCCAeigAwIBAgIBAjANBgkqhkiG9w0BAQsFADAVMRMwEQYDVQQDEwptaW5pa3ViZUNBMB4XDTIwMDQxMzEzMDQyNVoXDTIxMDQxNDEzMDQyNVowMTEXMBUGA1UEChMOc3lzdGVtOm1hc3RlcnMxFjAUBgNVBAMTDW1pbmlrdWJlLXVzZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDrMKV03/EKwgpOBIDvRFOxDEFBcCxuwrWva5GiZWh3UhLRTDZfeFgxeMYUo/bX0o1D/aDCgd0k1eTmA6ANchAldjjnxsvEiWZDWdu9tDQnmHP3dM4Zp14k7KrfNkG50eFXzIl9oIuAo5GDaeXydTufniLOaKor1uuk322Ms7rwci8DOz6LTXG6n6J8XL2U5b3gTFyBdkt08Uh0N/NhnuotOLyuAeGjJuTriHemyv0jT09twbEQtKhIvu4tyJ/C421PX+J3tgR63lkzQ3C98D5p1sYJseEQa8GXtQ9he08Uqh51roAvmoPhxguA7AuAgy/vAV1sfpCtei6Q68T4PrKDAgMBAAGjPzA9MA4GA1UdDwEB/wQEAwIFoDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQsFAAOCAQEAO9l9BxUB1UIACOvs23ONdsd71iKZczyC+D5fp4O159+azMfCisek2DaJHJpWPeZQEl/auGsMj15bEV+rECqtNpngHE2ywee3iJfWCnv41mGx+y5KcDDfl5C1lHxg+JYbIDc4KSSBdK6mdn0TvN6sl5bpT6wyxlxD2ln5z2B+NUkggSknljrm/nf7/nv5BWK+i4oG1XsuGhrGy8Yi4TFO5s2COh8ce3ToERv9BdxN/5N2UPNVOpM3dTPLgntzPIqgiLiGe0asENIrb8uwqVZdIGx2C3Blemv0kwwISWVLs+ouBJHS07uAlEfwDIaxn0z70We52oMM2vM0lR6orvgMvQ==\"}",
 			certificateStr: "MIIDADCCAeigAwIBAgIBAjANBgkqhkiG9w0BAQsFADAVMRMwEQYDVQQDEwptaW5pa3ViZUNBMB4XDTIwMDQxMzEzMDQyNVoXDTIxMDQxNDEzMDQyNVowMTEXMBUGA1UEChMOc3lzdGVtOm1hc3RlcnMxFjAUBgNVBAMTDW1pbmlrdWJlLXVzZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDrMKV03/EKwgpOBIDvRFOxDEFBcCxuwrWva5GiZWh3UhLRTDZfeFgxeMYUo/bX0o1D/aDCgd0k1eTmA6ANchAldjjnxsvEiWZDWdu9tDQnmHP3dM4Zp14k7KrfNkG50eFXzIl9oIuAo5GDaeXydTufniLOaKor1uuk322Ms7rwci8DOz6LTXG6n6J8XL2U5b3gTFyBdkt08Uh0N/NhnuotOLyuAeGjJuTriHemyv0jT09twbEQtKhIvu4tyJ/C421PX+J3tgR63lkzQ3C98D5p1sYJseEQa8GXtQ9he08Uqh51roAvmoPhxguA7AuAgy/vAV1sfpCtei6Q68T4PrKDAgMBAAGjPzA9MA4GA1UdDwEB/wQEAwIFoDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQsFAAOCAQEAO9l9BxUB1UIACOvs23ONdsd71iKZczyC+D5fp4O159+azMfCisek2DaJHJpWPeZQEl/auGsMj15bEV+rECqtNpngHE2ywee3iJfWCnv41mGx+y5KcDDfl5C1lHxg+JYbIDc4KSSBdK6mdn0TvN6sl5bpT6wyxlxD2ln5z2B+NUkggSknljrm/nf7/nv5BWK+i4oG1XsuGhrGy8Yi4TFO5s2COh8ce3ToERv9BdxN/5N2UPNVOpM3dTPLgntzPIqgiLiGe0asENIrb8uwqVZdIGx2C3Blemv0kwwISWVLs+ouBJHS07uAlEfwDIaxn0z70We52oMM2vM0lR6orvgMvQ==",
 			wantErr:        true,
 		},
@@ -280,23 +281,19 @@ func TestGetCertificate(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			t.Log(test.response)
+			t.Log(test.certificateStr)
 			var clusterAddress string
 			var persister restclient.AuthProviderConfigPersister
 
-			// execCommand = func(command string, args ...string) *exec.Cmd {
-			// 	cs := []string{"-test.run=TestHelperProcessGetCertificate", certTest.response, "--", command}
-			// 	cs = append(cs, args...)
-			// 	cmd := exec.Command(os.Args[0], cs...)
-			// 	return cmd
-			// }
-
 			s := newEndpoint()
 			certificateByte, _ := b64.StdEncoding.DecodeString(test.certificateStr)
-			f, err := mock.NewExternalSignerPlugin(s.path, pb.CertificateResponse{Certificate: certificateByte}, pb.SignatureResponse{})
+			f, err := mock.NewExternalSignerPlugin(s.path, pb.CertificateResponse{Content: &pb.CertificateResponse_Certificate{Certificate: certificateByte}}, pb.SignatureResponse{}, []byte{})
 			f.Start()
 			defer f.CleanUp()
-			signer.socketPath = s.path
+
+			if test.name == "correct" {
+				test.cfg["pathSocket"] = s.path
+			}
 
 			provider, err := newExternalSignerAuthProvider(clusterAddress, test.cfg, persister)
 			if err != nil {
@@ -327,304 +324,320 @@ func TestGetCertificate(t *testing.T) {
 	}
 }
 
-// func TestHelperProcessSignatureVerification(t *testing.T) {
-// 	// fmt.Fprintf(os.Stderr, "HELPER: TestHelperProcess, args: %d\n", len(os.Args))
+func TestSignatureVerification(t *testing.T) {
 
-// 	if len(os.Args) < 5 {
-// 		t.Skip()
-// 	}
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
-// 	request := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
-// 	fmt.Fprintf(os.Stderr, "Env: %s\n", request)
+	message := []byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.")
 
-// 	type RequestMessage struct {
-// 		APIVersion string `json:"apiVersion"`
-// 		Kind       string `json:"kind"`
-// 	}
+	opts := rsa.PSSOptions{
+		SaltLength: -1,
+		Hash:       crypto.SHA256.HashFunc(),
+	}
 
-// 	var requestMessage RequestMessage
+	PSSmessage := message
+	newhash := crypto.SHA256
+	pssh := newhash.New()
+	pssh.Write(PSSmessage)
+	hashed := pssh.Sum(nil)
 
-// 	err := json.Unmarshal([]byte(request), &requestMessage)
-// 	if err != nil {
-// 		// fmt.Printf("unmarshal error: %v", err)
-// 		t.Fatalf("Unmarshal error: %s\n", err)
-// 		return
-// 	}
+	signature, err := rsa.SignPSS(rand.Reader, privKey, newhash, hashed, &opts)
 
-// 	if requestMessage.Kind == "" {
-// 		t.Fatal(err)
-// 		return
-// 	}
+	certificate := &x509.Certificate{
+		SerialNumber: big.NewInt(2019),
+		Subject: pkix.Name{
+			Organization: []string{"Company, INC."},
+		},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
+		SubjectKeyId: []byte{1, 2, 3, 4, 6},
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
 
-// 	var response string
+	ca := &x509.Certificate{
+		SerialNumber: big.NewInt(2019),
+		Subject: pkix.Name{
+			Organization: []string{"Company, INC."},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(10, 0, 0),
+		IsCA:                  true,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
 
-// 	switch requestMessage.Kind {
-// 	case "Certificate":
-// 		response = os.Args[2]
-// 	case "Sign":
-// 		response = os.Args[3]
-// 	default:
-// 		t.Fatalf("Response for Kind %s is not implemented", requestMessage.Kind)
-// 		return
-// 	}
+	caPrivKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
-// 	// fmt.Fprintf(os.Stderr, "%s\n", response)
-// 	fmt.Fprintf(os.Stdout, response)
-// 	os.Exit(0)
-// }
+	certBytes, err := x509.CreateCertificate(rand.Reader, certificate, ca, privKey.Public(), caPrivKey)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
-// func TestHelperProcessSignatureVerificationGetCertificate(t *testing.T) {
-// 	// fmt.Fprintf(os.Stderr, "HELPER: TestHelperProcessSignatureVerificationGetCertificate, args: %d\n", len(os.Args))
-// 	// t.Helper()
-// 	if len(os.Args) < 5 {
-// 		t.Skip()
-// 	}
+	wrongSignature, _ := b64.RawStdEncoding.DecodeString("18IHTFq1MHoF7cvyQETVFipuKTGWQdmCYUIUggHEVGMEuJ5l/8wM2vABgRIxJdv5q5Bg7gCZvmAXtOO4/uP7bq7cazZ7TSuVNFPgsfLx0mKUvm1SLVpRkqQPah8CNt5YsH+WxthTFg/U86pD+Mi7j1kkB8PXnB23Pe1H2nmFPjNxneehCZSpyKFD9TRXwlkud0jQdwlFZzh9cZSZ8blNQBN8iBCJ8/KpLgpvxq7DYQW/mLzaieBg1OKwUfCCPAwhbaxjWygzzztOgQ15aVX9fVq53iUuhhB0vjX3I2kXEIdJXlH//UwhQZWQuXFI8F689vfkyY3psJpFFAqLKxXAbw==")
 
-// 	response := os.Args[2]
-// 	// signatureRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
-// 	// fmt.Fprintf(os.Stderr, "Args: %s\n", signatureRequest)
-// 	fmt.Fprintf(os.Stdout, response)
-// 	os.Exit(0)
-// }
+	tests := []struct {
+		name                   string
+		cfg                    map[string]string
+		responseGetCertificate []byte
+		responseSign           []byte
+		wantCertErr            bool
+		wantSignErr            bool
+		wantVerifErr           bool
+	}{
+		{
+			name: "verificationShouldSucceed",
+			cfg: map[string]string{
+				"pathLib":  "/path/to/library.so",
+				"slotId":   "0",
+				"objectId": "2",
+			},
+			responseGetCertificate: certBytes,
+			responseSign:           signature,
+		},
+		{
+			name: "verificationShouldFail",
+			cfg: map[string]string{
+				"pathLib":  "/path/to/library.so",
+				"slotId":   "0",
+				"objectId": "2",
+			},
+			responseGetCertificate: certBytes,
+			responseSign:           wrongSignature,
+			wantVerifErr:           true,
+		},
+	}
 
-// func TestHelperProcessSignatureVerificationSign(t *testing.T) {
-// 	// fmt.Fprintf(os.Stderr, "HELPER: TestHelperProcessSignatureVerificationSign, args: %d\n", len(os.Args))
-// 	// t.Helper()
-// 	if len(os.Args) < 5 {
-// 		t.Skip()
-// 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var clusterAddress string
+			var persister restclient.AuthProviderConfigPersister
 
-// 	response := os.Args[2]
-// 	signRequest := os.Getenv("EXTERNAL_SIGNER_PLUGIN_CONFIG")
-// 	// fmt.Fprintf(os.Stderr, "Args: %s\n", signRequest)
+			s := newEndpoint()
+			f, err := mock.NewExternalSignerPlugin(s.path, pb.CertificateResponse{Content: &pb.CertificateResponse_Certificate{Certificate: test.responseGetCertificate}}, pb.SignatureResponse{Content: &pb.SignatureResponse_Signature{Signature: test.responseSign}}, nil)
+			f.Start()
+			defer f.CleanUp()
 
-// 	type SignMessage struct {
-// 		APIVersion     string            `json:"apiVersion"`
-// 		Kind           string            `json:"kind"`
-// 		Configuration  map[string]string `json:"configuration"`
-// 		Digest         string            `json:"digest"`
-// 		SignerOptsType string            `json:"signerOptsType"`
-// 		SignerOpts     string            `json:"signerOpts"`
-// 	}
+			test.cfg["pathSocket"] = s.path
 
-// 	var signMessage SignMessage
+			provider, err := newExternalSignerAuthProvider(clusterAddress, test.cfg, persister)
+			if err != nil {
+				fmt.Printf("Error: %s\n", err)
+				if !test.wantCertErr {
+					t.Fatal(err)
+				}
+				return
+			}
 
-// 	err := json.Unmarshal([]byte(signRequest), &signMessage)
-// 	if err != nil {
-// 		// fmt.Printf("unmarshal error: %v", err)
-// 		t.Fatalf("Unmarshal error: %s\n", err)
-// 		return
-// 	}
+			if test.wantCertErr {
+				t.Fatal("expected get certificate error")
+			}
 
-// 	digest, err := b64.StdEncoding.DecodeString(signMessage.Digest)
+			var authenticator *Authenticator
+			authenticator = provider.(*Authenticator)
 
-// 	fmt.Printf("DIGEST: %s\n", string(digest))
+			if authenticator.tlsCert == nil {
+				t.Fatalf("Error: %s\n", err)
+				return
+			}
 
-// 	if signMessage.Configuration["pathLib"] == "" {
-// 		t.Fatal(err)
-// 		return
-// 	}
+			certParsed, err := x509.ParseCertificate(authenticator.tlsCert.Certificate[0])
+			if err != nil {
+				t.Fatalf("parse certificate error: %v", err)
+				return
+			}
 
-// 	fmt.Fprintf(os.Stdout, response)
-// 	os.Exit(0)
-// }
+			signer := externalSigner{certParsed.PublicKey, test.cfg, "clusterName", s.path}
 
-// func TestSignatureVerification(t *testing.T) {
+			var rand io.Reader
+			var digest []byte
 
-// 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
-// 	if err != nil {
-// 		fmt.Println(err)
-// 		return
-// 	}
+			signerOptsString := "{\"SaltLength\":-1,\"Hash\":5}"
+			var pSSOptions rsa.PSSOptions
+			err = json.Unmarshal([]byte(signerOptsString), &pSSOptions)
+			if err != nil {
+				t.Fatalf("Unmarshal error: %s\n", err)
+				return
+			}
 
-// 	message := []byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.")
+			rand = nil
+			digest = []byte("Zd0PQ68EirC6Ebw43KBjqpCcv/yPyMT1eUOQZDkEuug=")
 
-// 	opts := rsa.PSSOptions{
-// 		SaltLength: -1,
-// 		Hash:       crypto.SHA256.HashFunc(),
-// 	}
+			signatureExt, err := signer.Sign(rand, digest, &pSSOptions)
+			if err != nil {
+				fmt.Printf("Error: %s\n", err)
+				if !test.wantSignErr {
+					t.Fatal(err)
+				}
+				return
+			}
 
-// 	PSSmessage := message
-// 	newhash := crypto.SHA256
-// 	pssh := newhash.New()
-// 	pssh.Write(PSSmessage)
-// 	hashed := pssh.Sum(nil)
+			if test.wantSignErr {
+				t.Fatal("expected signer error")
+			}
 
-// 	signature, err := rsa.SignPSS(rand.Reader, privKey, newhash, hashed, &opts)
+			err = rsa.VerifyPSS(certParsed.PublicKey.(*rsa.PublicKey), newhash, hashed, signatureExt, &opts)
+			if err != nil {
+				fmt.Printf("Error: %s\n", err)
+				if !test.wantVerifErr {
+					t.Fatal(err)
+				}
+				return
+			}
 
-// 	certificate := &x509.Certificate{
-// 		SerialNumber: big.NewInt(2019),
-// 		Subject: pkix.Name{
-// 			Organization: []string{"Company, INC."},
-// 		},
-// 		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-// 		NotBefore:    time.Now(),
-// 		NotAfter:     time.Now().AddDate(10, 0, 0),
-// 		SubjectKeyId: []byte{1, 2, 3, 4, 6},
-// 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-// 		KeyUsage:     x509.KeyUsageDigitalSignature,
-// 	}
+			if test.wantVerifErr {
+				t.Fatal("expected verification error")
+			}
+		})
+	}
+}
 
-// 	ca := &x509.Certificate{
-// 		SerialNumber: big.NewInt(2019),
-// 		Subject: pkix.Name{
-// 			Organization: []string{"Company, INC."},
-// 		},
-// 		NotBefore:             time.Now(),
-// 		NotAfter:              time.Now().AddDate(10, 0, 0),
-// 		IsCA:                  true,
-// 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-// 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-// 		BasicConstraintsValid: true,
-// 	}
+func TestTLSCredentialsSelfSigned(t *testing.T) {
+	certPool := x509.NewCertPool()
+	certRaw, privKey, cert := genClientCert(t)
 
-// 	caPrivKey, err := rsa.GenerateKey(rand.Reader, 4096)
-// 	if err != nil {
-// 		fmt.Println(err)
-// 		return
-// 	}
+	if !certPool.AppendCertsFromPEM(cert) {
+		t.Fatal("failed to add client cert to CertPool")
+	}
 
-// 	certBytes, err := x509.CreateCertificate(rand.Reader, certificate, ca, privKey.Public(), caPrivKey)
-// 	if err != nil {
-// 		fmt.Println(err)
-// 		return
-// 	}
+	// _, nKey, _ := genClientCert(t)
+	nCertRaw, nKey, nCert := genClientCert(t)
+	if !certPool.AppendCertsFromPEM(nCert) {
+		t.Fatal("failed to add client nCert to CertPool")
+	}
 
-// 	tests := []struct {
-// 		name                   string
-// 		cfg                    map[string]string
-// 		responseGetCertificate string
-// 		responseSign           string
-// 		wantCertErr            bool
-// 		wantSignErr            bool
-// 		wantVerifErr           bool
-// 	}{
-// 		{
-// 			name: "verificationShouldSucceed",
-// 			cfg: map[string]string{
-// 				"pathExec":  "/path/to/externalSigner",
-// 				"pathLib":   "/path/to/library.so",
-// 				"slot-id":   "0",
-// 				"object-id": "2",
-// 			},
-// 			responseGetCertificate: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(certBytes) + "\"}",
-// 			responseSign:           "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"" + b64.StdEncoding.EncodeToString(signature) + "\"}",
-// 		},
-// 		{
-// 			name: "verificationShouldFail",
-// 			cfg: map[string]string{
-// 				"pathExec":  "/path/to/externalSigner",
-// 				"pathLib":   "/path/to/library.so",
-// 				"slot-id":   "0",
-// 				"object-id": "2",
-// 			},
-// 			responseGetCertificate: "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(certBytes) + "\"}",
-// 			responseSign:           "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalSigner\",\"signature\":\"18IHTFq1MHoF7cvyQETVFipuKTGWQdmCYUIUggHEVGMEuJ5l/8wM2vABgRIxJdv5q5Bg7gCZvmAXtOO4/uP7bq7cazZ7TSuVNFPgsfLx0mKUvm1SLVpRkqQPah8CNt5YsH+WxthTFg/U86pD+Mi7j1kkB8PXnB23Pe1H2nmFPjNxneehCZSpyKFD9TRXwlkud0jQdwlFZzh9cZSZ8blNQBN8iBCJ8/KpLgpvxq7DYQW/mLzaieBg1OKwUfCCPAwhbaxjWygzzztOgQ15aVX9fVq53iUuhhB0vjX3I2kXEIdJXlH//UwhQZWQuXFI8F689vfkyY3psJpFFAqLKxXAbw==\"}",
-// 			wantVerifErr:           true,
-// 		},
-// 	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "ok")
+	}))
+	server.TLS = &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  certPool,
+	}
+	server.StartTLS()
+	defer server.Close()
 
-// 	for _, test := range tests {
-// 		t.Run(test.name, func(t *testing.T) {
-// 			t.Log(test.responseGetCertificate)
-// 			var clusterAddress string
-// 			var persister restclient.AuthProviderConfigPersister
+	var clusterAddress string
+	var persister restclient.AuthProviderConfigPersister
+	cfg := map[string]string{
+		"pathLib":  "/path/to/library.so",
+		"slotId":   "0",
+		"objectId": "2",
+	}
 
-// 			// fmt.Printf("Before set execCommand\n")
-// 			execCommand = func(command string, args ...string) *exec.Cmd {
-// 				cs := []string{"-test.run=TestHelperProcessSignatureVerificationGetCertificate", test.responseGetCertificate, "--", command}
-// 				// cs := []string{"-test.run=TestHelperProcessSignatureVerification", test.responseGetCertificate, test.responseSign, "--", command}
-// 				cs = append(cs, args...)
-// 				cmd := exec.Command(os.Args[0], cs...)
-// 				return cmd
-// 			}
-// 			// fmt.Printf("After set execCommand\n")
-// 			// helperResponse = *test.responseGetCertificate
-// 			// fmt.Fprintf(os.Stderr, "TEST: response: %v\n", helperResponse)
+	s := newEndpoint()
+	cfg["pathSocket"] = s.path
 
-// 			provider, err := newExternalSignerAuthProvider(clusterAddress, test.cfg, persister)
-// 			if err != nil {
-// 				fmt.Printf("Error: %s\n", err)
-// 				if !test.wantCertErr {
-// 					t.Fatal(err)
-// 				}
-// 				return
-// 			}
-// 			// fmt.Printf("After newExternalSignerAuthProvider\n")
+	f, err := mock.NewExternalSignerPlugin(s.path, pb.CertificateResponse{Content: &pb.CertificateResponse_Certificate{Certificate: certRaw}}, pb.SignatureResponse{}, privKey)
+	f.Start()
+	// defer f.CleanUp()
 
-// 			if test.wantCertErr {
-// 				t.Fatal("expected get certificate error")
-// 			}
+	provider, err := newExternalSignerAuthProvider(clusterAddress, cfg, persister)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a *Authenticator
+	a = provider.(*Authenticator)
 
-// 			var authenticator *Authenticator
-// 			authenticator = provider.(*Authenticator)
+	tc := &transport.Config{TLS: transport.TLSConfig{Insecure: true}}
+	if err := a.UpdateTransportConfig(tc); err != nil {
+		t.Fatal(err)
+	}
 
-// 			if authenticator.tlsCert == nil {
-// 				t.Fatalf("Error: %s\n", err)
-// 				return
-// 			}
+	get := func(t *testing.T, desc string, wantErr bool) {
+		t.Run(desc, func(t *testing.T) {
+			tlsCfg, err := transport.TLSConfigFor(tc)
+			if err != nil {
+				t.Fatal("TLSConfigFor:", err)
+			}
+			client := http.Client{
+				Transport: &http.Transport{TLSClientConfig: tlsCfg},
+			}
 
-// 			certParsed, err := x509.ParseCertificate(authenticator.tlsCert.Certificate[0])
-// 			if err != nil {
-// 				t.Fatalf("parse certificate error: %v", err)
-// 				return
-// 			}
+			resp, err := client.Get(server.URL)
 
-// 			signer := externalSigner{certParsed.PublicKey, test.cfg}
+			switch {
+			case err != nil && !wantErr:
+				t.Errorf("got client.Get error: %q, want nil", err)
+			case err == nil && wantErr:
+				t.Error("got nil client.Get error, want non-nil")
+			}
+			if err == nil {
+				resp.Body.Close()
+			}
 
-// 			var rand io.Reader
-// 			var digest []byte
+		})
+	}
 
-// 			signerOptsString := "{\"SaltLength\":-1,\"Hash\":5}"
-// 			var pSSOptions rsa.PSSOptions
-// 			err = json.Unmarshal([]byte(signerOptsString), &pSSOptions)
-// 			if err != nil {
-// 				t.Fatalf("Unmarshal error: %s\n", err)
-// 				return
-// 			}
+	get(t, "valid TLS cert", false)
+	f.CleanUp()
+	f2, err := mock.NewExternalSignerPlugin(s.path, pb.CertificateResponse{Content: &pb.CertificateResponse_Certificate{Certificate: certRaw}}, pb.SignatureResponse{}, nKey)
+	f2.Start()
+	get(t, "untrusted TLS cert", true)
+	f2.CleanUp()
 
-// 			rand = nil
-// 			digest = []byte("Zd0PQ68EirC6Ebw43KBjqpCcv/yPyMT1eUOQZDkEuug=")
+	s3 := newEndpoint()
+	cfg["pathSocket"] = s3.path
+	f3, err := mock.NewExternalSignerPlugin(s3.path, pb.CertificateResponse{Content: &pb.CertificateResponse_Certificate{Certificate: nCertRaw}}, pb.SignatureResponse{}, nKey)
+	f3.Start()
 
-// 			execCommand = func(command string, args ...string) *exec.Cmd {
-// 				csSign := []string{"-test.run=TestHelperProcessSignatureVerificationSign", test.responseSign, "--", command}
-// 				csSign = append(csSign, args...)
-// 				cmdSign := exec.Command(os.Args[0], csSign...)
-// 				return cmdSign
-// 			}
-// 			// helperResponse = &test.responseSign
-// 			// fmt.Fprintf(os.Stderr, "TEST: response: %v\n", helperResponse)
+	provider, err = newExternalSignerAuthProvider(clusterAddress, cfg, persister)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = provider.(*Authenticator)
 
-// 			signatureExt, err := signer.Sign(rand, digest, &pSSOptions)
-// 			if err != nil {
-// 				fmt.Printf("Error: %s\n", err)
-// 				if !test.wantSignErr {
-// 					t.Fatal(err)
-// 				}
-// 				return
-// 			}
+	tc = &transport.Config{TLS: transport.TLSConfig{Insecure: true}}
+	if err := a.UpdateTransportConfig(tc); err != nil {
+		t.Fatal(err)
+	}
 
-// 			if test.wantSignErr {
-// 				t.Fatal("expected signer error")
-// 			}
+	get(t, "valid TLS cert again", false)
+	f3.CleanUp()
+}
 
-// 			err = rsa.VerifyPSS(certParsed.PublicKey.(*rsa.PublicKey), newhash, hashed, signatureExt, &opts)
-// 			if err != nil {
-// 				fmt.Printf("Error: %s\n", err)
-// 				if !test.wantVerifErr {
-// 					t.Fatal(err)
-// 				}
-// 				return
-// 			}
+// genClientCert generates an x509 certificate for testing. Certificate and key
+// are returned in PEM encoding. The generated cert expires in 24 hours.
+func genClientCert(t *testing.T) ([]byte, []byte, []byte) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyRaw := x509.MarshalPKCS1PrivateKey(key)
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject:      pkix.Name{Organization: []string{"Acme Co"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(24 * time.Hour),
 
-// 			if test.wantVerifErr {
-// 				t.Fatal("expected verification error")
-// 			}
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	certRaw, err := x509.CreateCertificate(rand.Reader, cert, cert, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-// 			// fmt.Fprintf(os.Stderr, "Successfully verified message with signature and public key")
-// 		})
-// 	}
-// }
+	return certRaw,
+		keyRaw,
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certRaw})
+}
 
 // func TestTLSCredentialsCA(t *testing.T) {
 // 	// now := time.Now()
@@ -1005,202 +1018,4 @@ func TestGetCertificate(t *testing.T) {
 
 // 	fmt.Fprintf(os.Stdout, response)
 // 	os.Exit(0)
-// }
-
-// func TestTLSCredentialsSelfSigned(t *testing.T) {
-// 	certPool := x509.NewCertPool()
-// 	certRaw, privKey, cert := genClientCert(t)
-// 	_, nKey, _ := genClientCert(t)
-// 	// nCertRaw, nKey, nCert := genClientCert(t)
-
-// 	if !certPool.AppendCertsFromPEM(cert) {
-// 		t.Fatal("failed to add client cert to CertPool")
-// 	}
-// 	// if !certPool.AppendCertsFromPEM(nCert) {
-// 	// 	t.Fatal("failed to add client nCert to CertPool")
-// 	// }
-
-// 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-// 		// fmt.Printf("INSIDE SERVER!\n")
-
-// 		// fmt.Printf("request TLS.CipherSuite: %v\n", r.TLS.CipherSuite)
-// 		// fmt.Printf("request TLS.DidResume: %v\n", r.TLS.DidResume)
-// 		// fmt.Printf("request TLS.CipherSuite: %v\n", r.TLS.VerifiedChains)
-// 		// fmt.Printf("request header: %v\n", r.Header)
-// 		// body, err := ioutil.ReadAll(r.Body)
-// 		// if err != nil {
-// 		// 	t.Fatal(err)
-// 		// }
-// 		// bodyString := string(body)
-// 		// fmt.Printf("requestbody: %s\n", bodyString)
-// 		fmt.Fprintln(w, "ok")
-// 	}))
-// 	server.TLS = &tls.Config{
-// 		ClientAuth: tls.RequireAndVerifyClientCert,
-// 		ClientCAs:  certPool,
-// 	}
-// 	server.StartTLS()
-// 	defer server.Close()
-
-// 	var clusterAddress string
-// 	var persister restclient.AuthProviderConfigPersister
-// 	cfg := map[string]string{
-// 		"pathExec":  "/path/to/externalSigner",
-// 		"pathLib":   "/path/to/library.so",
-// 		"slot-id":   "0",
-// 		"object-id": "2",
-// 	}
-
-// 	responseGetCertificate := "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(certRaw) + "\"}"
-
-// 	// fmt.Printf("responseGetCertificate: %s\n", responseGetCertificate)
-
-// 	execCommand = func(command string, args ...string) *exec.Cmd {
-// 		cs := []string{"-test.run=TestHelperProcessSignatureVerificationGetCertificate", responseGetCertificate, "--", command}
-// 		cs = append(cs, args...)
-// 		cmd := exec.Command(os.Args[0], cs...)
-// 		return cmd
-// 	}
-
-// 	provider, err := newExternalSignerAuthProvider(clusterAddress, cfg, persister)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	var a *Authenticator
-// 	a = provider.(*Authenticator)
-
-// 	tc := &transport.Config{TLS: transport.TLSConfig{Insecure: true}}
-// 	if err := a.UpdateTransportConfig(tc); err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	execCommand = func(command string, args ...string) *exec.Cmd {
-// 		csSign := []string{"-test.run=TestHelperProcessSignatureVerificationSignWithDigest", b64.StdEncoding.EncodeToString(privKey), "--", command}
-// 		csSign = append(csSign, args...)
-// 		cmdSign := exec.Command(os.Args[0], csSign...)
-// 		return cmdSign
-// 	}
-
-// 	get := func(t *testing.T, desc string, wantErr bool) {
-// 		t.Run(desc, func(t *testing.T) {
-// 			tlsCfg, err := transport.TLSConfigFor(tc)
-// 			if err != nil {
-// 				t.Fatal("TLSConfigFor:", err)
-// 			}
-// 			client := http.Client{
-// 				Transport: &http.Transport{TLSClientConfig: tlsCfg},
-// 			}
-
-// 			resp, err := client.Get(server.URL)
-
-// 			switch {
-// 			case err != nil && !wantErr:
-// 				t.Errorf("got client.Get error: %q, want nil", err)
-// 			case err == nil && wantErr:
-// 				t.Error("got nil client.Get error, want non-nil")
-// 			}
-// 			if err == nil {
-// 				resp.Body.Close()
-// 			}
-
-// 		})
-// 	}
-
-// 	get(t, "valid TLS cert", false)
-
-// 	execCommand = func(command string, args ...string) *exec.Cmd {
-// 		csSign := []string{"-test.run=TestHelperProcessSignatureVerificationSignWithDigest", b64.StdEncoding.EncodeToString(nKey), "--", command}
-// 		csSign = append(csSign, args...)
-// 		cmdSign := exec.Command(os.Args[0], csSign...)
-// 		return cmdSign
-// 	}
-
-// 	get(t, "untrusted TLS cert", true)
-
-// 	// nResponseGetCertificate := "{\"apiVersion\":\"external-signer.authentication.k8s.io/v1alpha1\",\"kind\":\"ExternalPublicKey\",\"certificate\":\"" + b64.StdEncoding.EncodeToString(nCertRaw) + "\"}"
-
-// 	// execCommand = func(command string, args ...string) *exec.Cmd {
-// 	// 	cs := []string{"-test.run=TestHelperProcessSignatureVerificationGetCertificate", nResponseGetCertificate, "--", command}
-// 	// 	cs = append(cs, args...)
-// 	// 	cmd := exec.Command(os.Args[0], cs...)
-// 	// 	return cmd
-// 	// }
-
-// 	// nprovider, err := newExternalSignerAuthProvider(clusterAddress, cfg, persister)
-// 	// if err != nil {
-// 	// 	t.Fatal(err)
-// 	// }
-// 	// var na *Authenticator
-// 	// na = nprovider.(*Authenticator)
-
-// 	// ntc := &transport.Config{TLS: transport.TLSConfig{Insecure: true}}
-// 	// if err := na.UpdateTransportConfig(ntc); err != nil {
-// 	// 	t.Fatal(err)
-// 	// }
-
-// 	// nGet := func(t *testing.T, desc string, wantErr bool) {
-// 	// 	t.Run(desc, func(t *testing.T) {
-// 	// 		tlsCfg, err := transport.TLSConfigFor(ntc)
-// 	// 		if err != nil {
-// 	// 			t.Fatal("TLSConfigFor:", err)
-// 	// 		}
-// 	// 		client := http.Client{
-// 	// 			Transport: &http.Transport{TLSClientConfig: tlsCfg},
-// 	// 		}
-
-// 	// 		resp, err := client.Get(server.URL)
-
-// 	// 		switch {
-// 	// 		case err != nil && !wantErr:
-// 	// 			t.Errorf("got client.Get error: %q, want nil", err)
-// 	// 		case err == nil && wantErr:
-// 	// 			t.Error("got nil client.Get error, want non-nil")
-// 	// 		}
-// 	// 		if err == nil {
-// 	// 			resp.Body.Close()
-// 	// 		}
-
-// 	// 	})
-// 	// }
-
-// 	// nGet(t, "invalid signature", false)
-// }
-
-// // genClientCert generates an x509 certificate for testing. Certificate and key
-// // are returned in PEM encoding. The generated cert expires in 24 hours.
-// func genClientCert(t *testing.T) ([]byte, []byte, []byte) {
-// 	key, err := rsa.GenerateKey(rand.Reader, 2048)
-// 	// key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	keyRaw := x509.MarshalPKCS1PrivateKey(key)
-// 	// keyRaw, err := x509.MarshalECPrivateKey(key)
-// 	// if err != nil {
-// 	// t.Fatal(err)
-// 	// }
-// 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-// 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	cert := &x509.Certificate{
-// 		SerialNumber: serialNumber,
-// 		Subject:      pkix.Name{Organization: []string{"Acme Co"}},
-// 		NotBefore:    time.Now(),
-// 		NotAfter:     time.Now().Add(24 * time.Hour),
-
-// 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-// 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-// 		BasicConstraintsValid: true,
-// 	}
-// 	certRaw, err := x509.CreateCertificate(rand.Reader, cert, cert, key.Public(), key)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	// fmt.Printf("cert: %v\n", cert)
-
-// 	return certRaw,
-// 		keyRaw,
-// 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certRaw})
 // }
