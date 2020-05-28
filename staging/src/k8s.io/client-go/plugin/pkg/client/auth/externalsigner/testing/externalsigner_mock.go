@@ -34,8 +34,7 @@ type ExternalSignerPlugin struct {
 	grpcServer *grpc.Server
 	listener   net.Listener
 	mu         *sync.Mutex
-	// lastEncryptRequest *kmsapi.EncryptRequest
-	inFailedState       bool
+	// inFailedState       bool
 	ver                 string
 	socketPath          string
 	certificateResponse v1alpha1.CertificateResponse
@@ -89,7 +88,6 @@ func (p *ExternalSignerPlugin) Sign(in *v1alpha1.SignatureRequest, stream v1alph
 
 	if p.privKeyRaw == nil {
 		fmt.Printf("Key is nil, using prepared response.\n")
-		// if &p.signatureResponse != nil {
 		stream.Send(&p.signatureResponse)
 	} else {
 		fmt.Printf("Key is not nil, processing the response.\n")
@@ -105,8 +103,8 @@ func (p *ExternalSignerPlugin) Sign(in *v1alpha1.SignatureRequest, stream v1alph
 
 		var signature []byte
 
-		switch in.GetSignerType() {
-		case v1alpha1.SignatureRequest_RSAPSS:
+		switch x := in.SignerOpts.(type) {
+		case *v1alpha1.SignatureRequest_SignerOptsRSAPSS:
 			pSSOptions := rsa.PSSOptions{
 				SaltLength: int(in.GetSignerOptsRSAPSS().GetSaltLenght()),
 				Hash:       crypto.Hash(in.GetSignerOptsRSAPSS().GetHash()),
@@ -120,7 +118,7 @@ func (p *ExternalSignerPlugin) Sign(in *v1alpha1.SignatureRequest, stream v1alph
 				return fmt.Errorf("sign error: %v", err)
 			}
 		default:
-			return fmt.Errorf("SignerOpts for %s are not implemented", in.GetSignerType())
+			return fmt.Errorf("SignerOpts has unexpected type %T", x)
 		}
 		stream.Send(&v1alpha1.SignatureResponse{Content: &v1alpha1.SignatureResponse_Signature{Signature: signature}})
 	}

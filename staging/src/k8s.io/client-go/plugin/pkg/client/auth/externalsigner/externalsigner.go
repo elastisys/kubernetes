@@ -131,14 +131,15 @@ func (priv *externalSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 	sctx, scancel := context.WithTimeout(context.Background(), time.Minute)
 	defer scancel()
 	stream, err := c.Sign(sctx, &pb.SignatureRequest{
-		Version:       "v1alpha1",
+		Version:       pb.Version_v1alpha1,
 		ClusterName:   priv.clusterName,
 		Configuration: priv.cfg,
 		Digest:        digest,
-		SignerType:    pb.SignatureRequest_RSAPSS,
-		SignerOptsRSAPSS: &pb.SignatureRequest_RSAPSSOptions{
-			SaltLenght: int32(pSSOptions.SaltLength),
-			Hash:       uint32(opts.HashFunc()),
+		SignerOpts: &pb.SignatureRequest_SignerOptsRSAPSS{
+			&pb.SignatureRequest_RSAPSSOptions{
+				SaltLenght: int32(pSSOptions.SaltLength),
+				Hash:       uint32(opts.HashFunc()),
+			},
 		},
 	})
 	if err != nil {
@@ -199,7 +200,7 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	stream, err := c.GetCertificate(ctx, &pb.CertificateRequest{
-		Version:       "v1alpha1",
+		Version:       pb.Version_v1alpha1,
 		ClusterName:   clusterAddress,
 		Configuration: cfg,
 	})
