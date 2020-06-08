@@ -257,6 +257,7 @@ type Authenticator struct {
 }
 
 func (p *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.Response, bool, error) {
+	fmt.Printf("request TLS.DidResume: %v\n", req.TLS.DidResume)
 	return nil, true, nil
 }
 
@@ -265,6 +266,37 @@ func (p *Authenticator) Login() error {
 }
 
 func (p *Authenticator) WrapTransport(rt http.RoundTripper) http.RoundTripper {
+	// debug.PrintStack()
+
+	// fmt.Println(reflect.TypeOf(rt))
+
+	// fmt.Printf("WrapTransport rt: %v\n", rt)
+
+	switch x := rt.(type) {
+	case *http.Transport:
+		var transportVar *http.Transport
+
+		transportVar = rt.(*http.Transport)
+
+		// transportVar.TLSHandshakeTimeout = time.Minute
+		// transportVar.TLSClientConfig.SessionTicketsDisabled = true
+
+		// fmt.Printf("transport: %v\n", transportVar)
+
+		fmt.Printf("TLSHandshakeTimeout: %v\n", transportVar.TLSHandshakeTimeout)
+		// fmt.Printf("TLSClientConfig: %v\n", transportVar.TLSClientConfig)
+		fmt.Printf("SessionTicketsDisabled: %v\n", transportVar.TLSClientConfig.SessionTicketsDisabled)
+		fmt.Printf("SessionTicketKey: %v\n", transportVar.TLSClientConfig.SessionTicketKey)
+		fmt.Printf("ClientSessionCache: %v\n", transportVar.TLSClientConfig.ClientSessionCache)
+
+	// case *disk.cacheRoundTripper:
+	//
+	case nil:
+		// The field is not set.
+	default:
+		fmt.Printf("Signature has unsupported type %T\n", x)
+	}
+
 	return rt
 }
 
