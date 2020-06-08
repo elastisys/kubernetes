@@ -231,7 +231,7 @@ func newExternalSignerAuthProvider(clusterAddress string, cfg map[string]string,
 		case nil:
 			// The field is not set.
 		default:
-			return nil, fmt.Errorf("Signature has unexpected type %T", x)
+			return nil, fmt.Errorf("Certificate response has unexpected type %T", x)
 		}
 	}
 
