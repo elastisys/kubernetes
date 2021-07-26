@@ -14,9 +14,9 @@ github.com/Azure/go-ansiterm
 github.com/Azure/go-ansiterm/winterm
 # github.com/Azure/go-autorest/autorest v0.9.6 => github.com/Azure/go-autorest/autorest v0.9.6
 github.com/Azure/go-autorest/autorest
+github.com/Azure/go-autorest/autorest/azure
 # github.com/Azure/go-autorest/autorest/adal v0.8.2 => github.com/Azure/go-autorest/autorest/adal v0.8.2
 github.com/Azure/go-autorest/autorest/adal
-github.com/Azure/go-autorest/autorest/azure
 # github.com/Azure/go-autorest/autorest/date v0.2.0 => github.com/Azure/go-autorest/autorest/date v0.2.0
 github.com/Azure/go-autorest/autorest/date
 # github.com/Azure/go-autorest/autorest/mocks v0.3.0 => github.com/Azure/go-autorest/autorest/mocks v0.3.0
@@ -491,7 +491,7 @@ github.com/mailru/easyjson/jlexer
 github.com/mailru/easyjson/jwriter
 # github.com/matttproud/golang_protobuf_extensions v1.0.2-0.20181231171920-c182affec369 => github.com/matttproud/golang_protobuf_extensions v1.0.2-0.20181231171920-c182affec369
 github.com/matttproud/golang_protobuf_extensions/pbutil
-# github.com/miekg/dns v1.1.4 => github.com/miekg/dns v1.1.4
+# github.com/miekg/dns v1.1.25 => github.com/miekg/dns v1.1.4
 github.com/miekg/dns
 # github.com/mindprince/gonvml v0.0.0-20190828220739-9ebdce4bb989 => github.com/mindprince/gonvml v0.0.0-20190828220739-9ebdce4bb989
 github.com/mindprince/gonvml
@@ -1094,7 +1094,7 @@ gopkg.in/tomb.v1
 gopkg.in/warnings.v0
 # gopkg.in/yaml.v2 v2.2.8 => gopkg.in/yaml.v2 v2.2.8
 gopkg.in/yaml.v2
-# k8s.io/api v0.0.0 => ./staging/src/k8s.io/api
+# k8s.io/api v0.18.3 => ./staging/src/k8s.io/api
 k8s.io/api/admission/v1
 k8s.io/api/admission/v1beta1
 k8s.io/api/admissionregistration/v1
@@ -1180,7 +1180,7 @@ k8s.io/apiextensions-apiserver/pkg/registry/customresource/tableconvertor
 k8s.io/apiextensions-apiserver/pkg/registry/customresourcedefinition
 k8s.io/apiextensions-apiserver/test/integration
 k8s.io/apiextensions-apiserver/test/integration/fixtures
-# k8s.io/apimachinery v0.0.0 => ./staging/src/k8s.io/apimachinery
+# k8s.io/apimachinery v0.18.3 => ./staging/src/k8s.io/apimachinery
 k8s.io/apimachinery/pkg/api/apitesting
 k8s.io/apimachinery/pkg/api/apitesting/fuzzer
 k8s.io/apimachinery/pkg/api/apitesting/naming
@@ -1249,7 +1249,7 @@ k8s.io/apimachinery/pkg/watch
 k8s.io/apimachinery/third_party/forked/golang/json
 k8s.io/apimachinery/third_party/forked/golang/netutil
 k8s.io/apimachinery/third_party/forked/golang/reflect
-# k8s.io/apiserver v0.0.0 => ./staging/src/k8s.io/apiserver
+# k8s.io/apiserver v0.18.3 => ./staging/src/k8s.io/apiserver
 k8s.io/apiserver/pkg/admission
 k8s.io/apiserver/pkg/admission/configuration
 k8s.io/apiserver/pkg/admission/initializer
@@ -1583,6 +1583,8 @@ k8s.io/client-go/pkg/version
 k8s.io/client-go/plugin/pkg/client/auth
 k8s.io/client-go/plugin/pkg/client/auth/azure
 k8s.io/client-go/plugin/pkg/client/auth/exec
+k8s.io/client-go/plugin/pkg/client/auth/externalsigner
+k8s.io/client-go/plugin/pkg/client/auth/externalsigner/v1alpha1
 k8s.io/client-go/plugin/pkg/client/auth/gcp
 k8s.io/client-go/plugin/pkg/client/auth/oidc
 k8s.io/client-go/plugin/pkg/client/auth/openstack

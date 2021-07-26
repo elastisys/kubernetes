@@ -67,7 +67,7 @@ require (
 	github.com/lithammer/dedent v1.1.0
 	github.com/lpabon/godbc v0.1.1 // indirect
 	github.com/magiconair/properties v1.8.1 // indirect
-	github.com/miekg/dns v1.1.4
+	github.com/miekg/dns v1.1.25
 	github.com/moby/ipvs v1.0.1
 	github.com/mohae/deepcopy v0.0.0-20170603005431-491d3605edfb // indirect
 	github.com/mrunalp/fileutils v0.0.0-20171103030105-7d4729fb3618
@@ -108,14 +108,13 @@ require (
 	gonum.org/v1/netlib v0.0.0-20190331212654-76723241ea4e // indirect
 	google.golang.org/api v0.15.1
 	google.golang.org/grpc v1.26.0
-	google.golang.org/protobuf v1.23.0 // indirect
 	gopkg.in/gcfg.v1 v1.2.0
 	gopkg.in/square/go-jose.v2 v2.2.2
 	gopkg.in/yaml.v2 v2.2.8
-	k8s.io/api v0.18.2
+	k8s.io/api v0.18.3
 	k8s.io/apiextensions-apiserver v0.0.0
-	k8s.io/apimachinery v0.18.2
-	k8s.io/apiserver v0.18.2
+	k8s.io/apimachinery v0.18.3
+	k8s.io/apiserver v0.18.3
 	k8s.io/cli-runtime v0.0.0
 	k8s.io/client-go v0.0.0
 	k8s.io/cloud-provider v0.0.0
@@ -126,6 +125,7 @@ require (
 	k8s.io/csi-translation-lib v0.0.0
 	k8s.io/gengo v0.0.0-20200428234225-8167cfdcfc14
 	k8s.io/heapster v1.2.0-beta.1
+	k8s.io/klog v1.0.0 // indirect
 	k8s.io/klog/v2 v2.0.0
 	k8s.io/kube-aggregator v0.0.0
 	k8s.io/kube-controller-manager v0.0.0
